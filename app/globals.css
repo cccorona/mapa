@@ -1,0 +1,324 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Mapa de Observaciones – dark artistic palette always active */
+  --background: #0d1117;           /* deep near-black */
+  --foreground: #d4c9a8;           /* aged parchment text */
+  --card: #111820;                 /* petroleum-tinted dark */
+  --card-foreground: #d4c9a8;
+  --popover: #0f1a16;              /* dark green-tinted manuscript */
+  --popover-foreground: #d4c9a8;
+  --primary: #4a7c6f;              /* muted teal-green */
+  --primary-foreground: #d4c9a8;
+  --secondary: #1e2b28;            /* dark forest green */
+  --secondary-foreground: #a8b8a0;
+  --muted: #1a1f1c;
+  --muted-foreground: #7a8a7a;
+  --accent: #8b7355;               /* sepia-amber accent */
+  --accent-foreground: #d4c9a8;
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: #2a3a35;
+  --input: #1e2b28;
+  --ring: #4a7c6f;
+  --radius: 0.375rem;
+
+  /* custom tokens */
+  --petroleum: #1a3040;
+  --sepia: #8b7355;
+  --parchment: #d4c9a8;
+  --parchment-dim: #9a9070;
+  --panel-bg: #0e1a14;
+  --panel-border: #2a3a30;
+  --halo: rgba(74, 124, 111, 0.18);
+  --halo-sepia: rgba(139, 115, 85, 0.22);
+  --grain-opacity: 0.04;
+
+  --sidebar: #0e1a14;
+  --sidebar-foreground: #d4c9a8;
+  --sidebar-primary: #4a7c6f;
+  --sidebar-primary-foreground: #d4c9a8;
+  --sidebar-accent: #1e2b28;
+  --sidebar-accent-foreground: #a8b8a0;
+  --sidebar-border: #2a3a30;
+  --sidebar-ring: #4a7c6f;
+}
+
+@theme inline {
+  --font-sans: var(--font-cormorant), 'Georgia', serif;
+  --font-serif: var(--font-cormorant), 'Georgia', serif;
+  --font-mono: var(--font-dm-mono), 'Courier New', monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-background text-foreground font-serif antialiased;
+    background-color: var(--background);
+  }
+  /* Subtle cinematic grain overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 128px 128px;
+    opacity: 0.035;
+    mix-blend-mode: overlay;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sepia);
+}
+
+@keyframes popup-crystal-enter {
+  0% {
+    transform: translateY(16px) scale(0.93);
+    opacity: 0;
+    filter: blur(4px);
+  }
+  46% {
+    transform: translateY(-4px) scale(1.02);
+    opacity: 0.9;
+    filter: blur(1.5px);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes popup-crystal-exit {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    filter: blur(0);
+  }
+  38% {
+    transform: translateY(-2px) scale(1.01);
+    opacity: 0.88;
+  }
+  100% {
+    transform: translateY(18px) scale(0.95) rotate(-0.7deg);
+    opacity: 0;
+    filter: blur(3px);
+  }
+}
+
+@keyframes popup-shards-flicker {
+  0%,
+  100% {
+    opacity: 0.08;
+  }
+  50% {
+    opacity: 0.24;
+  }
+}
+
+.popup-crystal-enter {
+  animation: popup-crystal-enter 760ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.popup-crystal-exit {
+  animation: popup-crystal-exit 560ms cubic-bezier(0.32, 0.04, 0.56, 1) both;
+}
+
+.popup-crystal-shards {
+  background:
+    linear-gradient(118deg, rgba(212, 201, 168, 0.1) 0%, rgba(212, 201, 168, 0) 33%),
+    linear-gradient(60deg, rgba(74, 124, 111, 0.12) 0%, rgba(74, 124, 111, 0) 36%),
+    repeating-linear-gradient(
+      132deg,
+      rgba(255, 255, 255, 0) 0px,
+      rgba(255, 255, 255, 0) 17px,
+      rgba(212, 201, 168, 0.08) 18px,
+      rgba(212, 201, 168, 0.08) 19px
+    );
+  mix-blend-mode: screen;
+  animation: popup-shards-flicker 420ms ease-in-out 1;
+}
+
+.ethereal-loader-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 58% 46% at 50% 52%, rgba(74, 124, 111, 0.14) 0%, rgba(74, 124, 111, 0.05) 38%, rgba(13, 17, 23, 0.72) 100%),
+    radial-gradient(ellipse 44% 34% at 52% 48%, rgba(139, 115, 85, 0.14) 0%, rgba(13, 17, 23, 0) 68%);
+  backdrop-filter: blur(2px);
+}
+
+.ethereal-loader-panel {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  border-radius: 9999px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(212, 201, 168, 0.22);
+  background: radial-gradient(circle at 48% 46%, rgba(15, 26, 22, 0.84) 0%, rgba(13, 17, 23, 0.92) 70%);
+  box-shadow:
+    0 0 26px rgba(74, 124, 111, 0.25),
+    0 0 54px rgba(139, 115, 85, 0.25),
+    inset 0 0 20px rgba(212, 201, 168, 0.07);
+}
+
+.ethereal-loader-fade-out {
+  opacity: 0;
+  filter: blur(5px) saturate(0.86);
+  transform: scale(1.018);
+  transition:
+    opacity 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.map-visibility-transition {
+  transition:
+    opacity 540ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0ms;
+}
+
+.ethereal-loader-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.46) 0%, rgba(212, 201, 168, 0.75) 28%, rgba(74, 124, 111, 0.5) 62%, rgba(13, 17, 23, 0.36) 100%);
+  box-shadow:
+    0 0 20px rgba(212, 201, 168, 0.45),
+    0 0 40px rgba(74, 124, 111, 0.4);
+  animation: ethereal-orb-pulse 1.9s ease-in-out infinite;
+}
+
+.ethereal-loader-ring {
+  position: absolute;
+  border-radius: 9999px;
+  border: 1px solid rgba(212, 201, 168, 0.24);
+  mix-blend-mode: screen;
+}
+
+.ethereal-loader-ring--a {
+  width: 132px;
+  height: 132px;
+  animation: ethereal-ring-spin 4.2s linear infinite;
+}
+
+.ethereal-loader-ring--b {
+  width: 168px;
+  height: 168px;
+  border-color: rgba(74, 124, 111, 0.28);
+  animation: ethereal-ring-spin-rev 5.8s linear infinite;
+}
+
+@keyframes ethereal-orb-pulse {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.82;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes ethereal-ring-spin {
+  0% {
+    transform: rotate(0deg) scale(0.98);
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.72;
+  }
+  100% {
+    transform: rotate(360deg) scale(1.02);
+    opacity: 0.45;
+  }
+}
+
+@keyframes ethereal-ring-spin-rev {
+  0% {
+    transform: rotate(360deg) scale(1.03);
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.64;
+  }
+  100% {
+    transform: rotate(0deg) scale(0.96);
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup-crystal-enter,
+  .popup-crystal-exit,
+  .popup-crystal-shards,
+  .ethereal-loader-orb,
+  .ethereal-loader-ring--a,
+  .ethereal-loader-ring--b {
+    animation: none !important;
+  }
+  .ethereal-loader-fade-out,
+  .map-visibility-transition {
+    transition: none !important;
+    transform: none !important;
+    filter: none !important;
+  }
+}
