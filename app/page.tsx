@@ -15,7 +15,7 @@ import type { ObservationEvent } from "@/types/event"
 import { METRO_STATIONS, METRO_STORIES } from "@/lib/metro-data"
 import { cn, coordKey, filterEventsInBounds, groupEventsByCoords } from "@/lib/utils"
 import { CDMX_BOUNDS, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
-import { DEFAULT_MAP_CONFIG } from "@/lib/map-config"
+import { getDefaultMapConfig, type MapConfig } from "@/lib/map-config"
 
 const DEFAULT_FILTERS = {
   type: "all",
@@ -26,6 +26,8 @@ const DEFAULT_FILTERS = {
   dateFrom: "",
   dateTo: "",
 }
+
+const IS_PRD = process.env.NEXT_PUBLIC_PRD === "true"
 
 function EtherealLoader({ fullscreen = false, fading = false }: { fullscreen?: boolean; fading?: boolean }) {
   return (
@@ -54,9 +56,11 @@ function MapaDeObservacionesContent() {
   const searchParams = useSearchParams()
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
-  const [filters, setFilters] = useState(DEFAULT_FILTERS)
+  const [filters, setFilters] = useState(() =>
+    IS_PRD ? { ...DEFAULT_FILTERS, showMetroLines: true } : DEFAULT_FILTERS
+  )
   const [zoom, setZoom] = useState(CDMX_DEFAULT_ZOOM)
-  const [mapConfig, setMapConfig] = useState<typeof DEFAULT_MAP_CONFIG>(DEFAULT_MAP_CONFIG)
+  const [mapConfig, setMapConfig] = useState(() => getDefaultMapConfig(IS_PRD))
   const [mapReadyPhase, setMapReadyPhase] = useState<MapReadyPhase>(hasMapboxToken ? "booting" : "ready")
   const [geoState, setGeoState] = useState<"pending" | "center_pending" | "settled">(hasMapboxToken ? "pending" : "settled")
   const [showLoader, setShowLoader] = useState(hasMapboxToken)
@@ -237,7 +241,7 @@ function MapaDeObservacionesContent() {
     window.history.replaceState(null, "", url)
   }, [filters.type, filters.intensity, filters.dateFrom, filters.dateTo])
 
-  const handleMapConfigChange = useCallback((nextConfig: typeof DEFAULT_MAP_CONFIG) => {
+  const handleMapConfigChange = useCallback((nextConfig: MapConfig) => {
     setMapConfig(nextConfig)
     if (typeof nextConfig.zoom === "number") {
       setZoom(nextConfig.zoom)
@@ -448,7 +452,8 @@ function MapaDeObservacionesContent() {
             onFilterChange={handleFilterChange}
             mapConfig={mapConfig}
             onMapConfigChange={handleMapConfigChange}
-            showMapTestPanel={hasMapboxToken}
+            showMapTestPanel={hasMapboxToken && !IS_PRD}
+            isPrd={IS_PRD}
           />
         </div>
 
@@ -485,7 +490,8 @@ function MapaDeObservacionesContent() {
               onFilterChange={handleFilterChange}
               mapConfig={mapConfig}
               onMapConfigChange={handleMapConfigChange}
-              showMapTestPanel={hasMapboxToken}
+              showMapTestPanel={hasMapboxToken && !IS_PRD}
+              isPrd={IS_PRD}
             />
           </div>
         </div>

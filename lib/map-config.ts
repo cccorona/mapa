@@ -143,6 +143,27 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
   },
 }
 
+/** Popup defaults for PRD mode (Etéreo from POPUP / LECTURA panel). */
+export const PRD_POPUP_CONFIG: PopupConfig = {
+  titleSize: 28,
+  bodySize: 24,
+  metaSize: 15,
+  backdropOpacity: 54,
+  veilOpacity: 48,
+  panelGlow: 32,
+  blurIn: 6,
+  animDuration: 960,
+}
+
+/** Returns default map config; when prd is true, popupConfig uses PRD_POPUP_CONFIG. */
+export function getDefaultMapConfig(prd: boolean): MapConfig {
+  if (!prd) return DEFAULT_MAP_CONFIG
+  return {
+    ...DEFAULT_MAP_CONFIG,
+    popupConfig: PRD_POPUP_CONFIG,
+  }
+}
+
 /** Base CSS filter values per artistic preset (applied on top of manual filter) */
 export const ARTISTIC_PRESETS: Record<
   ArtisticMode,

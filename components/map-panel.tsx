@@ -117,6 +117,7 @@ interface MapPanelProps {
   mapConfig?: MapConfig
   onMapConfigChange?: (config: MapConfig) => void
   showMapTestPanel?: boolean
+  isPrd?: boolean
 }
 
 const MapPanelInner = ({
@@ -130,6 +131,7 @@ const MapPanelInner = ({
   mapConfig,
   onMapConfigChange,
   showMapTestPanel = false,
+  isPrd = false,
 }: MapPanelProps) => {
   const [expandedSection, setExpandedSection] = useState<string | null>("filtros")
   const [expandedTestSubpanel, setExpandedTestSubpanel] = useState<string | null>(null)
@@ -218,12 +220,14 @@ const MapPanelInner = ({
               >
                 + Registrar observación
               </a>
-              <a
-                href="/admin"
-                className="font-mono text-[12px] tracking-[0.15em] uppercase text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
-              >
-                Moderación
-              </a>
+              {!isPrd && (
+                <a
+                  href="/admin"
+                  className="font-mono text-[12px] tracking-[0.15em] uppercase text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
+                >
+                  Moderación
+                </a>
+              )}
             </div>
           </header>
 
@@ -352,64 +356,66 @@ const MapPanelInner = ({
             )}
           </div>
 
-          {/* Capas adicionales */}
-          <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
-            <button
-              className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
-              onClick={() => setExpandedSection(expandedSection === "capas-adicionales" ? null : "capas-adicionales")}
-              aria-expanded={expandedSection === "capas-adicionales"}
-            >
-              <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Capas adicionales</span>
-              <svg
-                width="10"
-                height="10"
-                viewBox="0 0 10 10"
-                fill="none"
-                className={cn("transition-transform duration-300", expandedSection === "capas-adicionales" ? "rotate-180" : "")}
-                aria-hidden
+          {/* Capas adicionales - oculto en PRD (solo metro visible por default) */}
+          {!isPrd && (
+            <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+              <button
+                className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
+                onClick={() => setExpandedSection(expandedSection === "capas-adicionales" ? null : "capas-adicionales")}
+                aria-expanded={expandedSection === "capas-adicionales"}
               >
-                <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+                <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Capas adicionales</span>
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 10 10"
+                  fill="none"
+                  className={cn("transition-transform duration-300", expandedSection === "capas-adicionales" ? "rotate-180" : "")}
+                  aria-hidden
+                >
+                  <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
 
-            {expandedSection === "capas-adicionales" && (
-              <div className="px-6 pb-5 space-y-3">
-                {/* Líneas del Metro */}
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="flex-shrink-0">
-                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.8" />
-                      <text x="12" y="16" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor">M</text>
-                    </svg>
-                    Líneas del Metro
-                  </span>
-                  <button
-                    role="switch"
-                    aria-checked={filters.showMetroLines}
-                    onClick={() => onFilterChange("showMetroLines", !filters.showMetroLines)}
-                    className={cn(
-                      "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
-                      filters.showMetroLines
-                        ? "border-[var(--primary)] bg-[var(--primary)]/20"
-                        : "border-[var(--panel-border)] bg-transparent"
-                    )}
-                  >
-                    <span
+              {expandedSection === "capas-adicionales" && (
+                <div className="px-6 pb-5 space-y-3">
+                  {/* Líneas del Metro */}
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="flex-shrink-0">
+                        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.8" />
+                        <text x="12" y="16" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor">M</text>
+                      </svg>
+                      Líneas del Metro
+                    </span>
+                    <button
+                      role="switch"
+                      aria-checked={filters.showMetroLines}
+                      onClick={() => onFilterChange("showMetroLines", !filters.showMetroLines)}
                       className={cn(
-                        "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                        "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
                         filters.showMetroLines
-                          ? "left-4 bg-[var(--primary)]"
-                          : "left-0.5 bg-[var(--panel-border)]"
+                          ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                          : "border-[var(--panel-border)] bg-transparent"
                       )}
-                    />
-                  </button>
+                    >
+                      <span
+                        className={cn(
+                          "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                          filters.showMetroLines
+                            ? "left-4 bg-[var(--primary)]"
+                            : "left-0.5 bg-[var(--panel-border)]"
+                        )}
+                      />
+                    </button>
+                  </div>
+                  {/* Futuro: Metrobús, Ecobici, etc. - añadir aquí */}
                 </div>
-                {/* Futuro: Metrobús, Ecobici, etc. - añadir aquí */}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
-          {/* Prueba mapa - solo si Mapbox activo */}
+          {/* Prueba mapa - solo si Mapbox activo y no PRD */}
           {showMapTestPanel && mapConfig && onMapConfigChange && (
             <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
