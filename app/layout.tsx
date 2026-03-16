@@ -16,8 +16,8 @@ const dmMono = DM_Mono({
   variable: '--font-dm-mono',
 })
 
-const SITE_URL = 'https://cartografiaoculta.city'
-const OG_IMAGE_URL = 'https://cartografiaoculta.city/og.jpg'
+const SITE_URL = 'https://www.cartografiaoculta.city'
+const OG_IMAGE_URL = 'https://www.cartografiaoculta.city/og.jpg'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
