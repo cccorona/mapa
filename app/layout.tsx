@@ -16,10 +16,33 @@ const dmMono = DM_Mono({
   variable: '--font-dm-mono',
 })
 
+const SITE_URL = 'https://cartografiaoculta.city'
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: 'Mapa de Observaciones',
   description: 'Cartografía de momentos irreversibles',
   generator: 'v0.app',
+  alternates: {
+    canonical: '/',
+  },
+  openGraph: {
+    type: 'website',
+    locale: 'es_MX',
+    url: SITE_URL,
+    siteName: 'Mapa de Observaciones',
+    title: 'Mapa de Observaciones',
+    description: 'Cartografía de momentos irreversibles',
+    images: [
+      { url: '/og.png', width: 1200, height: 630, alt: 'Mapa de Observaciones - Cartografía oculta' },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Mapa de Observaciones',
+    description: 'Cartografía de momentos irreversibles',
+    images: ['/og.png'],
+  },
 }
 
 export const viewport = {
