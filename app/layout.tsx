@@ -20,6 +20,9 @@ export const metadata: Metadata = {
   title: 'Mapa de Observaciones',
   description: 'Cartografía de momentos irreversibles',
   generator: 'v0.app',
+}
+
+export const viewport = {
   themeColor: '#0d1117',
 }
 

@@ -46,3 +46,5 @@ export const EVENT_TYPE_TO_SYMBOL: Record<EventType, string> = {
   HEALTH_DIAGNOSIS: "cruz",
   LEGAL_EVENT: "documento",
 }
+
+/** Color for events: use SYMBOL_COLORS[getSymbolForType(eventType)] from lib/theme instead. */

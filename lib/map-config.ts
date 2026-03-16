@@ -49,11 +49,13 @@ export interface MapConfig {
     atmospheric: boolean
     mist: boolean
     vignette: boolean
+    rain: boolean
   }
   opacity: {
     atmospheric: number
     mist: number
     vignette: number
+    rain: number
   }
   filter: {
     sepia: number
@@ -69,13 +71,23 @@ export interface MapConfig {
     lng: number
     offsetY: number
   }
+  /** Mapbox native rain effect (GL JS 3.9+) */
+  mapboxRain: {
+    enabled: boolean
+    color: string
+  }
+  /** Mapbox native snow effect (GL JS 3.9+) */
+  mapboxSnow: {
+    enabled: boolean
+    color: string
+  }
 }
 
 export const DEFAULT_MAP_CONFIG: MapConfig = {
-  style: "mapbox://styles/mapbox/standard",
+  style: "mapbox://styles/ccoronacesar/cmmqs03ui008e01s1028b1h27",
   projection: "mercator",
-  zoom: 16,
-  pitch: 50,
+  zoom: 7,
+  pitch: 0,
   bearing: 0,
   standardConfig: {
     lightPreset: "dusk",
@@ -93,37 +105,41 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
   },
   boundaryGlow: {
     enabled: true,
-    veilOpacity: 62,
-    glowOpacity: 86,
-    glowWidth: 14,
-    glowBlur: 4.2,
-    lineOpacity: 92,
-    lineWidth: 2.4,
+    veilOpacity: 48,
+    glowOpacity: 92,
+    glowWidth: 20,
+    glowBlur: 6,
+    lineOpacity: 95,
+    lineWidth: 2.8,
   },
-  artisticMode: "none",
+  artisticMode: "carrington",
   overlays: {
     atmospheric: true,
     mist: true,
     vignette: true,
+    rain: false,
   },
   opacity: {
-    atmospheric: 100,
-    mist: 26,
+    atmospheric: 80,
+    mist: 50,
     vignette: 100,
+    rain: 65,
   },
-  filter: {
-    sepia: 34,
-    hueRotate: -17,
-    saturate: 113,
-    contrast: 128,
-    brightness: 145,
-  },
+  filter: { sepia: 30, hueRotate: 60, saturate: 60, contrast: 110, brightness: 95 },
   soulOrb: {
     enabled: false,
     color: "#050505",
     lat: CDMX_CENTER[1],
     lng: CDMX_CENTER[0],
     offsetY: -12,
+  },
+  mapboxRain: {
+    enabled: false,
+    color: "#a8adbc",
+  },
+  mapboxSnow: {
+    enabled: false,
+    color: "#ffffff",
   },
 }
 
@@ -150,6 +166,8 @@ export function exportMapConfig(config: Partial<MapConfig>): string {
     popupConfig: { ...DEFAULT_MAP_CONFIG.popupConfig, ...config.popupConfig },
     boundaryGlow: { ...DEFAULT_MAP_CONFIG.boundaryGlow, ...config.boundaryGlow },
     soulOrb: { ...DEFAULT_MAP_CONFIG.soulOrb, ...config.soulOrb },
+    mapboxRain: { ...DEFAULT_MAP_CONFIG.mapboxRain, ...config.mapboxRain },
+    mapboxSnow: { ...DEFAULT_MAP_CONFIG.mapboxSnow, ...config.mapboxSnow },
   }
   return JSON.stringify(full, null, 2)
 }

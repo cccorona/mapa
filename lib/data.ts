@@ -1,10 +1,11 @@
 import type { EventType, EmotionalIntensity } from "./constants"
 import type { ObservationEvent } from "@/types/event"
+import { METRO_EVENTS } from "./metro-events"
 
 export type { ObservationEvent }
 
 /** Mock data for development. Uses closed domain types. */
-export const EVENTS: ObservationEvent[] = [
+const BASE_EVENTS: ObservationEvent[] = [
   {
     id: "e01",
     title: "La última vez que dormí sin recordar",
@@ -669,3 +670,6 @@ export const EVENTS: ObservationEvent[] = [
     tags: ["testamento", "altruismo", "dinero", "decisiones"],
   },
 ]
+
+/** All events: base + metro Line 2 historical events. */
+export const EVENTS: ObservationEvent[] = [...BASE_EVENTS, ...METRO_EVENTS]

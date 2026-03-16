@@ -8,9 +8,12 @@ import { MapCanvas } from "@/components/map-canvas"
 import { MapboxCanvas } from "@/components/mapbox-canvas"
 import type { MapReadyPhase } from "@/components/mapbox-canvas"
 import { EventPopup } from "@/components/event-popup"
-import { EVENTS } from "@/lib/data"
-import { METRO_STORIES } from "@/lib/metro-data"
-import { cn, filterEventsInBounds } from "@/lib/utils"
+import { StationPopup } from "@/components/station-popup"
+import { LandmarkParticlesOverlay } from "@/components/landmark-particles-overlay"
+import { getEventsInBounds } from "@/lib/services/events"
+import type { ObservationEvent } from "@/types/event"
+import { METRO_STATIONS, METRO_STORIES } from "@/lib/metro-data"
+import { cn, coordKey, filterEventsInBounds, groupEventsByCoords } from "@/lib/utils"
 import { CDMX_BOUNDS, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
 import { DEFAULT_MAP_CONFIG } from "@/lib/map-config"
 
@@ -19,6 +22,7 @@ const DEFAULT_FILTERS = {
   intensity: "all",
   showDensity: false,
   showMetroLines: false,
+  showAllLayers: false,
   dateFrom: "",
   dateTo: "",
 }
@@ -48,7 +52,6 @@ function EtherealLoader({ fullscreen = false, fading = false }: { fullscreen?: b
 function MapaDeObservacionesContent() {
   const hasMapboxToken = !!process.env.NEXT_PUBLIC_MAPBOX_TOKEN
   const searchParams = useSearchParams()
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
@@ -58,11 +61,22 @@ function MapaDeObservacionesContent() {
   const [geoState, setGeoState] = useState<"pending" | "center_pending" | "settled">(hasMapboxToken ? "pending" : "settled")
   const [showLoader, setShowLoader] = useState(hasMapboxToken)
   const [isLoaderFading, setIsLoaderFading] = useState(false)
-  const [popupEventId, setPopupEventId] = useState<string | null>(null)
+  const [popupEventsAtPoint, setPopupEventsAtPoint] = useState<ObservationEvent[]>([])
+  const selectedEventId = popupEventsAtPoint[0]?.id ?? null
   const [popupMetroStoryId, setPopupMetroStoryId] = useState<string | null>(null)
+  const [popupStationId, setPopupStationId] = useState<string | null>(null)
   const [selectedMetroStoryId, setSelectedMetroStoryId] = useState<string | null>(null)
   const [popupPhase, setPopupPhase] = useState<"entering" | "visible" | "exiting">("visible")
   const popupTransitionTimerRef = useRef<number | null>(null)
+  const [mapBounds, setMapBounds] = useState<{ north: number; south: number; east: number; west: number } | null>(null)
+  const [landmarkOverlay, setLandmarkOverlay] = useState<{
+    name: string
+    iconUrl: string
+    iconSvgUrl?: string | null
+  } | null>(null)
+  const [events, setEvents] = useState<ObservationEvent[]>([])
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [eventsError, setEventsError] = useState(false)
 
   const clearPopupTransitionTimer = useCallback(() => {
     if (popupTransitionTimerRef.current) {
@@ -121,27 +135,38 @@ function MapaDeObservacionesContent() {
     return () => clearPopupTransitionTimer()
   }, [clearPopupTransitionTimer])
 
-  const selectedEvent = EVENTS.find((e) => e.id === popupEventId) ?? null
+  const filteredEvents = events.filter((e) => {
+    if (filters.type !== "all" && e.type !== filters.type) return false
+    if (filters.intensity !== "all" && e.intensity !== filters.intensity) return false
+    if (filters.dateFrom && e.date < filters.dateFrom) return false
+    if (filters.dateTo && e.date > filters.dateTo) return false
+    return true
+  })
+
   const selectedMetroStory = METRO_STORIES.find((s) => s.id === popupMetroStoryId) ?? null
-  const popupContent = selectedEvent ?? selectedMetroStory
 
   const handleSelectEvent = useCallback((id: string) => {
     setMobileDrawerOpen(false)
     setSelectedMetroStoryId(null)
     setPopupMetroStoryId(null)
-    if (selectedEventId === id && popupEventId === id) return
+    setPopupStationId(null)
+    const clickedEvent = filteredEvents.find((e) => e.id === id)
+    if (!clickedEvent) return
+    if (popupEventsAtPoint.some((e) => e.id === id)) return
 
-    setSelectedEventId(id)
+    const groupsByCoords = groupEventsByCoords(filteredEvents)
+    const key = coordKey(clickedEvent.coords.lat, clickedEvent.coords.lng)
+    const group = groupsByCoords.get(key) ?? [clickedEvent]
     clearPopupTransitionTimer()
 
     const animDuration = Math.max(250, mapConfig.popupConfig.animDuration)
     const exitDuration = Math.max(120, Math.round(animDuration * 0.45))
-    const hasPopupOpen = popupEventId || popupMetroStoryId
+    const hasPopupOpen = popupEventsAtPoint.length > 0 || !!popupMetroStoryId || !!popupStationId
 
     if (hasPopupOpen) {
       setPopupPhase("exiting")
       popupTransitionTimerRef.current = window.setTimeout(() => {
-        setPopupEventId(id)
+        setPopupEventsAtPoint(group)
         setPopupPhase("entering")
         popupTransitionTimerRef.current = window.setTimeout(() => {
           setPopupPhase("visible")
@@ -151,18 +176,18 @@ function MapaDeObservacionesContent() {
       return
     }
 
-    setPopupEventId(id)
+    setPopupEventsAtPoint(group)
     setPopupPhase("entering")
     popupTransitionTimerRef.current = window.setTimeout(() => {
       setPopupPhase("visible")
       popupTransitionTimerRef.current = null
     }, 70)
-  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventId, popupMetroStoryId, selectedEventId])
+  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, filteredEvents, popupEventsAtPoint, popupMetroStoryId, popupStationId])
 
   const handleSelectMetroStory = useCallback((id: string) => {
     setMobileDrawerOpen(false)
-    setSelectedEventId(null)
-    setPopupEventId(null)
+    setPopupEventsAtPoint([])
+    setPopupStationId(null)
     if (selectedMetroStoryId === id && popupMetroStoryId === id) return
 
     setSelectedMetroStoryId(id)
@@ -170,7 +195,7 @@ function MapaDeObservacionesContent() {
 
     const animDuration = Math.max(250, mapConfig.popupConfig.animDuration)
     const exitDuration = Math.max(120, Math.round(animDuration * 0.45))
-    const hasPopupOpen = popupEventId || popupMetroStoryId
+    const hasPopupOpen = popupEventsAtPoint.length > 0 || !!popupMetroStoryId || !!popupStationId
 
     if (hasPopupOpen) {
       setPopupPhase("exiting")
@@ -191,29 +216,26 @@ function MapaDeObservacionesContent() {
       setPopupPhase("visible")
       popupTransitionTimerRef.current = null
     }, 70)
-  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventId, popupMetroStoryId, selectedMetroStoryId])
+  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventsAtPoint, popupMetroStoryId, popupStationId, selectedMetroStoryId])
 
-  const handleFilterChange = useCallback(
-    (key: string, value: string | boolean) => {
-      setFilters((prev) => {
-        const next = { ...prev, [key]: value }
-        const params = new URLSearchParams(window.location.search)
-        if (next.type !== "all") params.set("type", next.type)
-        else params.delete("type")
-        if (next.intensity !== "all") params.set("intensity", next.intensity)
-        else params.delete("intensity")
-        if (next.dateFrom) params.set("from", next.dateFrom)
-        else params.delete("from")
-        if (next.dateTo) params.set("to", next.dateTo)
-        else params.delete("to")
-        const q = params.toString()
-        const url = q ? `?${q}` : window.location.pathname
-        window.history.replaceState(null, "", url)
-        return next
-      })
-    },
-    []
-  )
+  const handleFilterChange = useCallback((key: string, value: string | boolean) => {
+    setFilters((prev) => ({ ...prev, [key]: value }))
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    if (filters.type !== "all") params.set("type", filters.type)
+    else params.delete("type")
+    if (filters.intensity !== "all") params.set("intensity", filters.intensity)
+    else params.delete("intensity")
+    if (filters.dateFrom) params.set("from", filters.dateFrom)
+    else params.delete("from")
+    if (filters.dateTo) params.set("to", filters.dateTo)
+    else params.delete("to")
+    const q = params.toString()
+    const url = q ? `?${q}` : window.location.pathname
+    window.history.replaceState(null, "", url)
+  }, [filters.type, filters.intensity, filters.dateFrom, filters.dateTo])
 
   const handleMapConfigChange = useCallback((nextConfig: typeof DEFAULT_MAP_CONFIG) => {
     setMapConfig(nextConfig)
@@ -256,30 +278,117 @@ function MapaDeObservacionesContent() {
     return () => window.clearTimeout(timer)
   }, [hasMapboxToken, isBlockingReady])
 
+  const handleSelectStation = useCallback(
+    (stationId: string) => {
+      setMobileDrawerOpen(false)
+      setPopupEventsAtPoint([])
+      setSelectedMetroStoryId(null)
+      setPopupMetroStoryId(null)
+      if (popupStationId === stationId) return
+
+      setPopupStationId(stationId)
+      clearPopupTransitionTimer()
+
+      const animDuration = Math.max(250, mapConfig.popupConfig.animDuration)
+      const exitDuration = Math.max(120, Math.round(animDuration * 0.45))
+      const hasPopupOpen = popupEventsAtPoint.length > 0 || !!popupMetroStoryId || !!popupStationId
+
+      if (hasPopupOpen) {
+        setPopupPhase("exiting")
+        popupTransitionTimerRef.current = window.setTimeout(() => {
+          setPopupEventsAtPoint([])
+          setPopupMetroStoryId(null)
+          setPopupStationId(stationId)
+          setPopupPhase("entering")
+          popupTransitionTimerRef.current = window.setTimeout(() => {
+            setPopupPhase("visible")
+            popupTransitionTimerRef.current = null
+          }, 70)
+        }, exitDuration)
+        return
+      }
+
+      setPopupPhase("entering")
+      popupTransitionTimerRef.current = window.setTimeout(() => {
+        setPopupPhase("visible")
+        popupTransitionTimerRef.current = null
+      }, 70)
+    },
+    [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventsAtPoint, popupMetroStoryId, popupStationId]
+  )
+
   const handleClosePopup = useCallback(() => {
     clearPopupTransitionTimer()
-    setSelectedEventId(null)
     setSelectedMetroStoryId(null)
-    const hasPopupOpen = popupEventId || popupMetroStoryId
+    const hasPopupOpen = popupEventsAtPoint.length > 0 || !!popupMetroStoryId || !!popupStationId
     if (!hasPopupOpen) return
     setPopupPhase("exiting")
     const closeDelay = Math.max(120, Math.round(Math.max(250, mapConfig.popupConfig.animDuration) * 0.35))
     popupTransitionTimerRef.current = window.setTimeout(() => {
-      setPopupEventId(null)
+      setPopupEventsAtPoint([])
       setPopupMetroStoryId(null)
+      setPopupStationId(null)
       setPopupPhase("visible")
       popupTransitionTimerRef.current = null
     }, closeDelay)
-  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventId, popupMetroStoryId])
+  }, [clearPopupTransitionTimer, mapConfig.popupConfig.animDuration, popupEventsAtPoint, popupMetroStoryId, popupStationId])
+
+  // Overlay de partículas SVG desactivado hasta dominar el feature (bloqueaba el hilo).
+  const handleLandmarkClick = useCallback(
+    (_name: string, _iconUrl: string, _iconSvgUrl?: string | null) => {
+      // setLandmarkOverlay({ name, iconUrl, iconSvgUrl })
+    },
+    []
+  )
+
+  const [metroStationsFromGeoJSON, setMetroStationsFromGeoJSON] = useState<typeof METRO_STATIONS>([])
+  useEffect(() => {
+    if (!filters.showMetroLines && !filters.showAllLayers) return
+    fetch("/cdmx-metro-stations.geojson")
+      .then((r) => r.json())
+      .then((fc: { features?: Array<{ geometry: { coordinates: [number, number] }; properties: { name?: string; line?: string }; id?: string }> }) => {
+        const stations =
+          fc.features?.map((f, i) => {
+            const lineRaw = f.properties?.line ?? "?"
+            const line = String(lineRaw).replace(/^0+/, "") || String(lineRaw)
+            return {
+              id: f.id ?? `st-geo-${i}`,
+              name: f.properties?.name ?? "?",
+              line,
+              coords: {
+                lat: f.geometry?.coordinates?.[1] ?? 0,
+                lng: f.geometry?.coordinates?.[0] ?? 0,
+              },
+            }
+          }) ?? []
+        setMetroStationsFromGeoJSON(stations)
+      })
+      .catch(() => setMetroStationsFromGeoJSON(METRO_STATIONS))
+  }, [filters.showMetroLines, filters.showAllLayers])
+
+  const metroStationsForMap = metroStationsFromGeoJSON.length > 0 ? metroStationsFromGeoJSON : METRO_STATIONS
 
   const filteredMetroStories = filterEventsInBounds(METRO_STORIES, CDMX_BOUNDS)
-  const filteredEvents = filterEventsInBounds(EVENTS, CDMX_BOUNDS).filter((e) => {
-    if (filters.type !== "all" && e.type !== filters.type) return false
-    if (filters.intensity !== "all" && e.intensity !== filters.intensity) return false
-    if (filters.dateFrom && e.date < filters.dateFrom) return false
-    if (filters.dateTo && e.date > filters.dateTo) return false
-    return true
-  })
+
+  const handleBoundsChange = useCallback((bounds: { north: number; south: number; east: number; west: number }) => {
+    setMapBounds(bounds)
+  }, [])
+
+  useEffect(() => {
+    if (!mapBounds) return
+    setEventsLoading(true)
+    setEventsError(false)
+    getEventsInBounds(mapBounds)
+      .then((data) => {
+        setEvents(data)
+        setEventsError(false)
+      })
+      .catch(() => {
+        setEvents([])
+        setEventsError(true)
+      })
+      .finally(() => setEventsLoading(false))
+  }, [mapBounds])
 
   return (
     <main className="h-screen w-screen overflow-hidden flex flex-col" style={{ background: "var(--background)" }}>
@@ -397,10 +506,15 @@ function MapaDeObservacionesContent() {
                 onSelectEvent={handleSelectEvent}
                 showDensity={filters.showDensity}
                 showMetroLines={filters.showMetroLines}
+                showAllLayers={filters.showAllLayers}
+                metroStations={metroStationsForMap}
                 metroStories={filteredMetroStories}
                 selectedMetroStoryId={selectedMetroStoryId}
                 onSelectMetroStory={handleSelectMetroStory}
+                onSelectStation={handleSelectStation}
                 onZoomChange={setZoom}
+                onBoundsChange={handleBoundsChange}
+                onLandmarkClick={handleLandmarkClick}
                 mapStyle={mapConfig.style}
                 pitch={mapConfig.pitch}
                 bearing={mapConfig.bearing}
@@ -425,15 +539,33 @@ function MapaDeObservacionesContent() {
 
           {/* Event / Metro story popup */}
           <EventPopup
-            event={popupContent}
-            variant={selectedMetroStory ? "metro" : "event"}
+            events={popupEventsAtPoint}
+            metroStory={selectedMetroStory}
             onClose={handleClosePopup}
             popupConfig={mapConfig.popupConfig}
             phase={popupPhase}
           />
 
+          {/* Station popup (stations without story) */}
+          <StationPopup
+            station={(popupStationId ? metroStationsForMap.find((s) => s.id === popupStationId) : null) ?? null}
+            onClose={handleClosePopup}
+            popupConfig={mapConfig.popupConfig}
+            phase={popupPhase}
+          />
+
+          {/* Landmark particles overlay desactivado (partículas/SVG bloqueaban el hilo) */}
+          {false && landmarkOverlay && (
+            <LandmarkParticlesOverlay
+              name={landmarkOverlay.name}
+              iconUrl={landmarkOverlay.iconUrl}
+              iconSvgUrl={landmarkOverlay.iconSvgUrl}
+              onClose={() => setLandmarkOverlay(null)}
+            />
+          )}
+
           {/* Instruction hint */}
-          {!selectedEventId && !selectedMetroStoryId && (
+          {!selectedEventId && !selectedMetroStoryId && !popupStationId && (
             <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
               <p className="font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] opacity-35 text-center whitespace-nowrap">
                 Haz clic en un símbolo para revelar su registro

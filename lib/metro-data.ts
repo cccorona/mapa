@@ -1,10 +1,10 @@
 import type { MetroStation, MetroStory } from "@/types/metro"
 
 export const METRO_STATIONS: MetroStation[] = [
-  { id: "st-1", name: "Observatorio", line: "1", coords: { lat: 19.3582, lng: -99.2185 } },
-  { id: "st-2", name: "Balderas", line: "1", coords: { lat: 19.4269, lng: -99.1558 } },
-  { id: "st-3", name: "Pino Suárez", line: "1", coords: { lat: 19.4253, lng: -99.1333 } },
-  { id: "st-4", name: "Pantitlán", line: "1", coords: { lat: 19.4157, lng: -99.0722 } },
+  { id: "st-1", name: "Observatorio", line: "1", coords: { lat: 19.398237, lng: -99.200363 } },
+  { id: "st-2", name: "Balderas", line: "1", coords: { lat: 19.42744, lng: -99.149036 } },
+  { id: "st-3", name: "Pino Suárez", line: "1", coords: { lat: 19.425336, lng: -99.132943 } },
+  { id: "st-4", name: "Pantitlán", line: "1", coords: { lat: 19.415359, lng: -99.072132 } },
   { id: "st-5", name: "Cuatro Caminos", line: "2", coords: { lat: 19.4610, lng: -99.1405 } },
   { id: "st-6", name: "Zócalo", line: "2", coords: { lat: 19.4326, lng: -99.1332 } },
   { id: "st-7", name: "Tasqueña", line: "2", coords: { lat: 19.3290, lng: -99.1420 } },
@@ -22,7 +22,7 @@ export const METRO_STORIES: MetroStory[] = [
     description:
       "La última vez que nos vimos fue en el andén de Balderas, sin saber que sería la última. El tren se llevó a una de nosotras al norte y a la otra al sur. El andén quedó vacío, y desde entonces cada vez que paso por ahí siento que el tiempo se detuvo en ese instante.",
     date: "2020-03-15",
-    coords: { lat: 19.4269, lng: -99.1558 },
+    coords: { lat: 19.42744, lng: -99.149036 },
     tags: ["despedida", "metrópoli", "rumbo"],
   },
   {

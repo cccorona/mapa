@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { createClient } from "@/lib/supabase/client"
 
 export default function RegisterPage() {
   const router = useRouter()
@@ -17,9 +16,16 @@ export default function RegisterPage() {
     setError(null)
     setLoading(true)
     try {
-      const supabase = createClient()
-      const { error: err } = await supabase.auth.signUp({ email, password })
-      if (err) throw err
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        credentials: "include",
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error ?? "Error al registrarse")
+      }
       router.push("/")
       router.refresh()
     } catch (err) {

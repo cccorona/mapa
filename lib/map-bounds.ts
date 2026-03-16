@@ -10,4 +10,4 @@ export const CDMX_BOUNDS = {
 } as const
 
 export const CDMX_CENTER: [number, number] = [-99.13, 19.43]
-export const CDMX_DEFAULT_ZOOM = 11
+export const CDMX_DEFAULT_ZOOM = 7

@@ -53,7 +53,7 @@ export function AtmosphericOverlay({ className, zoom = 11, opacity = 1 }: Atmosp
         void main() {
           vec2 uv = vUv - 0.5;
           float dist = length(uv);
-          float zoomFog = smoothstep(10.0, 15.0, uZoom) * 0.15;
+          float zoomFog = smoothstep(6.0, 15.0, uZoom) * 0.15;
           float edgeFog = (1.0 - smoothstep(0.2, 0.9, dist)) * (0.05 + zoomFog);
           float breath = 0.01 * sin(uTime * 0.5);
           float alpha = (edgeFog + breath) * uOpacity;
@@ -70,12 +70,12 @@ export function AtmosphericOverlay({ className, zoom = 11, opacity = 1 }: Atmosp
     const mesh = new THREE.Mesh(geometry, material)
     scene.add(mesh)
 
-    const clock = new THREE.Clock()
+    const startMs = performance.now()
     let raf: number
 
     const animate = () => {
       raf = requestAnimationFrame(animate)
-      material.uniforms.uTime.value = clock.getElapsedTime()
+      material.uniforms.uTime.value = (performance.now() - startMs) / 1000
       renderer.render(scene, camera)
     }
     animate()

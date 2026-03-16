@@ -1,12 +1,12 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import type { ObservationEvent } from "@/lib/data"
 import type { MetroStory } from "@/types/metro"
 import { METRO_STATIONS } from "@/lib/metro-data"
-import { EVENT_TYPE_LABELS, INTENSITY_LABELS } from "@/lib/icons"
-import { TypeGlyph } from "@/components/type-glyph"
+import { EVENT_TYPE_LABELS, INTENSITY_LABELS, getSymbolForType } from "@/lib/icons"
+import { SymbolIcon } from "@/components/symbol-icon"
 import type { PopupConfig } from "@/lib/map-config"
 
 function MetroGlyph() {
@@ -19,28 +19,46 @@ function MetroGlyph() {
 }
 
 interface EventPopupProps {
-  event: ObservationEvent | MetroStory | null
-  variant?: "event" | "metro"
+  events: ObservationEvent[]
+  metroStory: MetroStory | null
   onClose: () => void
   popupConfig: PopupConfig
   phase: "entering" | "visible" | "exiting"
 }
 
-export function EventPopup({ event, variant = "event", onClose, popupConfig, phase }: EventPopupProps) {
+export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: EventPopupProps) {
   const ref = useRef<HTMLDivElement>(null)
-  const isOpen = !!event
+  const [carouselIndex, setCarouselIndex] = useState(0)
+  const isEventPopup = events.length > 0
+  const isMetroPopup = !!metroStory
+  const isOpen = isEventPopup || isMetroPopup
+  const currentEvent = isEventPopup ? events[Math.min(carouselIndex, events.length - 1)] : null
+  const event = isMetroPopup ? metroStory : currentEvent
   const durationMs = Math.max(200, popupConfig.animDuration)
   const veilAlpha = Math.max(0, Math.min(1, popupConfig.veilOpacity / 100))
   const backdropAlpha = Math.max(0, Math.min(0.9, popupConfig.backdropOpacity / 100))
   const glowStrength = Math.max(0, Math.min(1, popupConfig.panelGlow / 100))
 
   useEffect(() => {
+    setCarouselIndex(0)
+  }, [events])
+
+  useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose()
+      if (events.length > 1 && isOpen) {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault()
+          setCarouselIndex((i) => (i > 0 ? i - 1 : events.length - 1))
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault()
+          setCarouselIndex((i) => (i < events.length - 1 ? i + 1 : 0))
+        }
+      }
     }
     window.addEventListener("keydown", handleKey)
     return () => window.removeEventListener("keydown", handleKey)
-  }, [onClose])
+  }, [onClose, events.length, isOpen])
 
   // Trap focus inside panel when open
   useEffect(() => {
@@ -92,7 +110,7 @@ export function EventPopup({ event, variant = "event", onClose, popupConfig, pha
         ref={ref}
         role="dialog"
         aria-modal="true"
-        aria-label={event?.title ?? "Observación"}
+        aria-label={event?.title ?? (events.length > 1 ? `Observación ${carouselIndex + 1} de ${events.length}` : "Observación")}
         tabIndex={-1}
         className={cn(
           "relative pointer-events-auto",
@@ -133,10 +151,45 @@ export function EventPopup({ event, variant = "event", onClose, popupConfig, pha
               }}
             />
 
+            {/* Carousel controls when multiple events */}
+            {events.length > 1 && (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 z-10">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setCarouselIndex((i) => (i > 0 ? i - 1 : events.length - 1))
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:bg-[var(--panel-border)]/20 transition-colors"
+                  aria-label="Anterior"
+                >
+                  <svg width="8" height="12" viewBox="0 0 8 12" fill="none">
+                    <path d="M6 2L2 6l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <span className="font-mono text-[10px] tracking-wider text-[var(--parchment-dim)] min-w-[2.5rem] text-center">
+                  {carouselIndex + 1}/{events.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setCarouselIndex((i) => (i < events.length - 1 ? i + 1 : 0))
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:bg-[var(--panel-border)]/20 transition-colors"
+                  aria-label="Siguiente"
+                >
+                  <svg width="8" height="12" viewBox="0 0 8 12" fill="none">
+                    <path d="M2 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
             {/* Header */}
             <div className="px-6 pt-6 pb-4 border-b border-[var(--panel-border)] flex items-start gap-4">
               <div className="flex-shrink-0 mt-0.5">
-                {variant === "metro" ? <MetroGlyph /> : <TypeGlyph type={(event as ObservationEvent).type} />}
+                {isMetroPopup ? <MetroGlyph /> : <SymbolIcon name={getSymbolForType((event as ObservationEvent).type)} size={28} />}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-3">
@@ -156,7 +209,7 @@ export function EventPopup({ event, variant = "event", onClose, popupConfig, pha
                 </div>
 
                 <div className="flex items-center gap-3 mt-2">
-                  {variant === "metro" ? (
+                  {isMetroPopup ? (
                     <>
                       <span className="font-mono text-[11px] tracking-[0.16em] uppercase text-[var(--parchment-dim)] opacity-85">
                         Estación {METRO_STATIONS.find((s) => s.id === (event as MetroStory).stationId)?.name ?? (event as MetroStory).stationId}
@@ -209,7 +262,7 @@ export function EventPopup({ event, variant = "event", onClose, popupConfig, pha
             {/* Body */}
             <div className="px-6 py-5">
               {/* Location (event) or Station (metro) */}
-              {variant === "metro" ? (
+              {isMetroPopup ? (
                 <div className="flex items-center gap-2 mb-4">
                   <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden>
                     <circle cx="5" cy="4" r="2" stroke="var(--parchment-dim)" strokeWidth="0.8" />

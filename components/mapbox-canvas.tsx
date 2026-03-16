@@ -1,26 +1,121 @@
 "use client"
 
+import { createRoot } from "react-dom/client"
 import { useEffect, useRef, useState } from "react"
 import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import type { ObservationEvent } from "@/lib/data"
-import type { MetroStory } from "@/types/metro"
-import { EVENT_TYPE_TO_SYMBOL } from "@/lib/constants"
+import type { MetroStation, MetroStory } from "@/types/metro"
+import { getSymbolForType, SYMBOLS } from "@/lib/icons"
+import { SYMBOL_COLORS } from "@/lib/theme"
 import { CDMX_BOUNDS, CDMX_CENTER, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
 import { DEFAULT_MAP_CONFIG } from "@/lib/map-config"
 import type { BoundaryGlowConfig, MapConfig } from "@/lib/map-config"
 import { AtmosphericOverlay } from "@/components/atmospheric-overlay"
+import { RainOverlay } from "@/components/rain-overlay"
+import { SnowOverlay } from "@/components/snow-overlay"
+import { METRO_STATIONS } from "@/lib/metro-data"
+import { createClient } from "@/lib/supabase/client"
+import { LandmarkParticleIcon } from "@/components/landmark-particle-icon"
+import { devLog } from "@/lib/dev-log"
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? ""
 
 const CDMX_BOUNDARY_SOURCE_ID = "cdmx-boundary"
 const CDMX_BOUNDARY_GLOW_LAYER_ID = "cdmx-boundary-glow"
+const CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID = "cdmx-boundary-portal-glow"
 const CDMX_BOUNDARY_LINE_LAYER_ID = "cdmx-boundary-line"
 const CDMX_BOUNDARY_VEIL_LAYER_ID = "cdmx-boundary-veil"
 const CDMX_BOUNDARY_GEOJSON_URL = "/cdmx-boundary.geojson"
 const CDMX_METRO_SOURCE_ID = "cdmx-metro-lines"
+const CDMX_METRO_LINE_GLOW_LAYER_ID = "cdmx-metro-line-glow"
 const CDMX_METRO_LINE_LAYER_ID = "cdmx-metro-line"
 const CDMX_METRO_GEOJSON_URL = "/cdmx-metro-lines.geojson"
+const CDMX_EVENTS_SOURCE_ID = "cdmx-events"
+const EVENTS_LAYER_ID = "events-layer"
+const METRO_STATIONS_LAYER_ID = "metro-stations-layer"
+type LandmarkFromApi = {
+  id: string
+  name: string
+  lng: number
+  lat: number
+  icon_url: string
+  icon_svg_url?: string | null
+}
+
+function roundCoord(c: number): number {
+  return Math.round(c * 100000) / 100000
+}
+
+type PointFeature = {
+  type: "Feature"
+  geometry: { type: "Point"; coordinates: [number, number] }
+  properties: Record<string, string | number | boolean>
+}
+
+function buildEventsGeoJSON(
+  events: ObservationEvent[],
+  metroStations: MetroStation[],
+  includeEvents: boolean,
+  includeStations: boolean,
+  metroStories: MetroStory[]
+): { type: "FeatureCollection"; features: PointFeature[] } {
+  const stationIdToStory = new Map(metroStories.map((s) => [s.stationId, s]))
+  const nameToStory = new Map<string, MetroStory>()
+  metroStories.forEach((story) => {
+    const station = METRO_STATIONS.find((s) => s.id === story.stationId)
+    const name = station?.name
+    if (name) {
+      nameToStory.set(name, story)
+      if (name === "Zócalo") nameToStory.set("Zócalo/Tenochtitlan", story)
+    }
+  })
+
+  const eventFeatures: PointFeature[] = includeEvents
+    ? events.map((e) => ({
+        type: "Feature" as const,
+        geometry: {
+          type: "Point" as const,
+          coordinates: [roundCoord(e.coords.lng), roundCoord(e.coords.lat)],
+        },
+        properties: {
+          type: "event",
+          eventId: e.id,
+          eventType: e.type,
+          intensity: e.intensity,
+          color: SYMBOL_COLORS[getSymbolForType(e.type)] ?? "#8b7355",
+          symbol: getSymbolForType(e.type),
+        },
+      }))
+    : []
+
+  const stationFeatures: PointFeature[] =
+    includeStations && metroStations.length > 0
+      ? metroStations.map((s) => {
+          const story = stationIdToStory.get(s.id) ?? nameToStory.get(s.name)
+          return {
+            type: "Feature" as const,
+            geometry: {
+              type: "Point" as const,
+              coordinates: [roundCoord(s.coords.lng), roundCoord(s.coords.lat)],
+            },
+            properties: {
+              type: "station",
+              stationId: s.id,
+              name: s.name,
+              line: s.line,
+              hasStory: !!story,
+              storyId: story?.id ?? "",
+            },
+          }
+        })
+      : []
+
+  return {
+    type: "FeatureCollection",
+    features: [...eventFeatures, ...stationFeatures],
+  }
+}
 export type MapReadyPhase = "booting" | "styleLoaded" | "centering" | "ready"
 
 interface MapboxCanvasProps {
@@ -30,11 +125,16 @@ interface MapboxCanvasProps {
   onSelectEvent: (id: string) => void
   showDensity: boolean
   showMetroLines?: boolean
+  showAllLayers?: boolean
+  metroStations?: MetroStation[]
   metroStories?: MetroStory[]
   selectedMetroStoryId?: string | null
   onSelectMetroStory?: (id: string) => void
+  onSelectStation?: (stationId: string) => void
   onZoomChange?: (zoom: number) => void
+  onBoundsChange?: (bounds: { north: number; south: number; east: number; west: number }) => void
   onReadyPhaseChange?: (phase: MapReadyPhase) => void
+  onLandmarkClick?: (name: string, iconUrl: string, iconSvgUrl?: string | null) => void
   mapStyle?: string
   pitch?: number
   bearing?: number
@@ -48,21 +148,25 @@ export function MapboxCanvas({
   onSelectEvent,
   showDensity,
   showMetroLines = false,
+  showAllLayers = false,
+  metroStations = [],
   metroStories = [],
   selectedMetroStoryId = null,
   onSelectMetroStory,
+  onSelectStation,
   onZoomChange,
+  onBoundsChange,
   onReadyPhaseChange,
+  onLandmarkClick,
   mapStyle = "mapbox://styles/mapbox/light-v11",
   pitch = 0,
   bearing = 0,
   mapConfig,
   zoom = CDMX_DEFAULT_ZOOM,
 }: MapboxCanvasProps) {
+  devLog("[landmarks] MapboxCanvas render, token:", !!mapboxgl.accessToken)
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
-  const markersRef = useRef<mapboxgl.Marker[]>([])
-  const metroMarkersRef = useRef<mapboxgl.Marker[]>([])
   const soulMarkerRef = useRef<mapboxgl.Marker | null>(null)
   const materializationMarkerRef = useRef<mapboxgl.Marker | null>(null)
   const materializationTimeoutRef = useRef<number | null>(null)
@@ -73,9 +177,27 @@ export function MapboxCanvas({
   const lastCenteredEventRef = useRef<string | null>(null)
   const lastMaterializedEventRef = useRef<string | null>(null)
   const [isReady, setIsReady] = useState(false)
+  const [landmarksList, setLandmarksList] = useState<LandmarkFromApi[]>([])
+  const setLandmarksListRef = useRef(setLandmarksList)
+  setLandmarksListRef.current = setLandmarksList
+  const landmarksMarkersMapRef = useRef<Map<string, { marker: mapboxgl.Marker; root: ReturnType<typeof createRoot>; div: HTMLDivElement }>>(new Map())
+
+  const onSelectEventRef = useRef(onSelectEvent)
+  const onSelectMetroStoryRef = useRef(onSelectMetroStory)
+  const onSelectStationRef = useRef(onSelectStation)
+  const onLandmarkClickRef = useRef(onLandmarkClick)
+  onSelectEventRef.current = onSelectEvent
+  onSelectMetroStoryRef.current = onSelectMetroStory
+  onSelectStationRef.current = onSelectStation
+  onLandmarkClickRef.current = onLandmarkClick
 
   const projection = mapConfig?.projection ?? "mercator"
   const boundaryGlow = mapConfig?.boundaryGlow ?? DEFAULT_MAP_CONFIG.boundaryGlow
+  const mapboxRain = mapConfig?.mapboxRain ?? DEFAULT_MAP_CONFIG.mapboxRain
+  const mapboxSnow = mapConfig?.mapboxSnow ?? DEFAULT_MAP_CONFIG.mapboxSnow
+  const showMetro = showMetroLines || showAllLayers
+  const showEventsAndStations = !showMetroLines || showAllLayers
+  const showDensityEffective = showDensity && showEventsAndStations
   const emitReadyPhase = (phase: MapReadyPhase) => {
     if (currentReadyPhaseRef.current === phase) return
     currentReadyPhaseRef.current = phase
@@ -99,22 +221,41 @@ export function MapboxCanvas({
       bearing,
     })
 
-    map.on("error", (e) => console.error("[Mapbox]", e.error))
+    map.on("error", (e) => devLog("[Mapbox] error", { message: e.error?.message }))
 
     map.addControl(new mapboxgl.NavigationControl(), "bottom-right")
+    const emitBounds = () => {
+      const b = map.getBounds()
+      if (b) {
+        const ne = b.getNorthEast()
+        const sw = b.getSouthWest()
+        onBoundsChange?.({ north: ne.lat, south: sw.lat, east: ne.lng, west: sw.lng })
+      }
+    }
+
+    let moveendDebounceId: ReturnType<typeof setTimeout> | null = null
+    const onMoveEnd = () => {
+      if (moveendDebounceId) clearTimeout(moveendDebounceId)
+      moveendDebounceId = setTimeout(() => {
+        moveendDebounceId = null
+        emitBounds()
+      }, 250)
+    }
+
     map.on("load", () => {
+      devLog("[map] load event")
       emitReadyPhase("styleLoaded")
       map.setMaxBounds([
           [CDMX_BOUNDS.west, CDMX_BOUNDS.south],
           [CDMX_BOUNDS.east, CDMX_BOUNDS.north],
         ])
-      // Permitimos alejar más en Mercator para encuadrar completo el contorno CDMX.
-      map.setMinZoom(projection === "globe" ? 3 : 8)
-      map.setMaxZoom(18)
       onZoomChange?.(map.getZoom())
+      emitBounds()
       setIsReady(true)
+      devLog("[map] isReady=true")
     })
     map.on("zoomend", () => onZoomChange?.(map.getZoom()))
+    map.on("moveend", onMoveEnd)
     mapRef.current = map
     const resizeObserver = new ResizeObserver(() => {
       if (mapRef.current) mapRef.current.resize()
@@ -122,14 +263,13 @@ export function MapboxCanvas({
     resizeObserver.observe(el)
 
     return () => {
+      if (moveendDebounceId) clearTimeout(moveendDebounceId)
+      map.off("moveend", onMoveEnd)
       resizeObserver.disconnect()
       emitReadyPhase("booting")
+      setIsReady(false)
       hasCenteredSoulOnceRef.current = false
       waitingInitialCenterRef.current = false
-      metroMarkersRef.current.forEach((m) => m.remove())
-      metroMarkersRef.current = []
-      markersRef.current.forEach((m) => m.remove())
-      markersRef.current = []
       soulMarkerRef.current?.remove()
       soulMarkerRef.current = null
       materializationMarkerRef.current?.remove()
@@ -144,7 +284,7 @@ export function MapboxCanvas({
       map.remove()
       mapRef.current = null
     }
-  }, [mapStyle, projection, onReadyPhaseChange, onZoomChange])
+  }, [mapStyle, projection, onReadyPhaseChange, onZoomChange, onBoundsChange])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -224,15 +364,100 @@ export function MapboxCanvas({
   }, [mapStyle, isReady, standardConfig?.lightPreset, standardConfig?.show3dObjects])
 
   useEffect(() => {
+    devLog("[landmarks] layers effect", { hasMap: !!mapRef.current, isReady })
     if (!mapRef.current || !isReady) return
     const map = mapRef.current
-    const initialBoundaryPaint = getBoundaryGlowPaints(DEFAULT_MAP_CONFIG.boundaryGlow)
 
-    if (!map.getSource(CDMX_BOUNDARY_SOURCE_ID)) {
-      map.addSource(CDMX_BOUNDARY_SOURCE_ID, {
-        type: "geojson",
-        data: CDMX_BOUNDARY_GEOJSON_URL,
+    const styleSupportsNativePrecipitation = mapStyle?.includes?.("mapbox/standard") ?? false
+
+    const applyPrecipitation = () => {
+      if (!styleSupportsNativePrecipitation) return
+      requestAnimationFrame(() => {
+        if (!mapRef.current?.isStyleLoaded()) return
+        const m = mapRef.current
+        try {
+          const setRain = (m as { setRain?: (opt: Record<string, unknown>) => void }).setRain
+          const setSnow = (m as { setSnow?: (opt: Record<string, unknown>) => void }).setSnow
+          if (!setRain || !setSnow) return
+          const zoomReveal = (val: number) =>
+            ["interpolate", ["linear"], ["zoom"], 5, 0, 8, val] as unknown as [string, string, string, string, number, number, number]
+          if (mapboxRain.enabled) {
+            setRain({
+              density: zoomReveal(0.5),
+              intensity: 1.0,
+              color: mapboxRain.color,
+              opacity: 0.7,
+              vignette: zoomReveal(1.0),
+              "vignette-color": "#464646",
+              direction: [0, 80],
+              "droplet-size": [2.6, 18.2],
+              "distortion-strength": 0.7,
+              "center-thinning": 0,
+            })
+          } else {
+            setRain({ density: 0, intensity: 0 })
+          }
+          if (mapboxSnow.enabled) {
+            setSnow({
+              density: zoomReveal(0.85),
+              intensity: 1.0,
+              "center-thinning": 0.1,
+              direction: [0, 50],
+              opacity: 1.0,
+              color: mapboxSnow.color,
+              "flake-size": 0.71,
+              vignette: zoomReveal(0.3),
+              "vignette-color": mapboxSnow.color,
+            })
+          } else {
+            setSnow({ density: 0, intensity: 0 })
+          }
+        } catch {
+          /* Native precipitation not supported */
+        }
       })
+    }
+
+    const loadMapIcons = (): Promise<void> => {
+      return Promise.all(
+        SYMBOLS.map((symbol) => {
+          if (map.hasImage(symbol)) return Promise.resolve()
+          return new Promise<void>((resolve, reject) => {
+            map.loadImage(`/icons/${symbol}@2x.png`, (err, image) => {
+              if (err || !image) {
+                reject(err ?? new Error(`Failed to load ${symbol}`))
+                return
+              }
+              if (!map.hasImage(symbol)) {
+                map.addImage(symbol, image, { pixelRatio: 2 })
+              }
+              resolve()
+            })
+          })
+        })
+      ).then(() => {})
+    }
+
+    const loadLandmarksFromApi = async (): Promise<void> => {
+      devLog("[landmarks] loadLandmarksFromApi called")
+      const supabase = createClient()
+      const { data, error } = await supabase.rpc("get_landmarks")
+      const list = (data ?? []) as LandmarkFromApi[]
+      devLog("[landmarks] get_landmarks", { error: error?.message, count: list.length })
+      setLandmarksListRef.current(list)
+    }
+
+    const addCustomLayers = () => {
+      devLog("[landmarks] addCustomLayers", { styleLoaded: map.isStyleLoaded() })
+      if (!map.isStyleLoaded()) return
+      const initialBoundaryPaint = getBoundaryGlowPaints(DEFAULT_MAP_CONFIG.boundaryGlow)
+
+      if (!map.getSource(CDMX_BOUNDARY_SOURCE_ID)) {
+        map.addSource(CDMX_BOUNDARY_SOURCE_ID, {
+          type: "geojson",
+          data: CDMX_BOUNDARY_GEOJSON_URL,
+          buffer: 64,
+        })
     }
 
     if (!map.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) {
@@ -267,6 +492,43 @@ export function MapboxCanvas({
       })
     }
 
+    if (!map.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) {
+      map.addLayer({
+        id: CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID,
+        type: "line",
+        source: CDMX_BOUNDARY_SOURCE_ID,
+        layout: {
+          visibility: DEFAULT_MAP_CONFIG.boundaryGlow.enabled ? "visible" : "none",
+        },
+        paint: {
+          "line-color": "rgba(74, 180, 200, 0.4)",
+          "line-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            5, 0.5,
+            8, 0.45,
+            10, 0.2,
+            13, 0.35,
+            16, 0.5,
+            18, 0.55,
+          ],
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            5, 14,
+            8, 12,
+            10, 10,
+            13, 16,
+            16, 22,
+            18, 28,
+          ],
+          "line-blur": 12,
+        },
+      })
+    }
+
     if (!map.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) {
       map.addLayer({
         id: CDMX_BOUNDARY_LINE_LAYER_ID,
@@ -283,11 +545,43 @@ export function MapboxCanvas({
       })
     }
 
-    // Metro lines layer (above boundary, below markers)
+    // Metro lines: glow (tunnel) + colored lines
     if (!map.getSource(CDMX_METRO_SOURCE_ID)) {
       map.addSource(CDMX_METRO_SOURCE_ID, {
         type: "geojson",
         data: CDMX_METRO_GEOJSON_URL,
+      })
+    }
+    if (!map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) {
+      map.addLayer({
+        id: CDMX_METRO_LINE_GLOW_LAYER_ID,
+        type: "line",
+        source: CDMX_METRO_SOURCE_ID,
+        layout: {
+          visibility: "none",
+          "line-join": "round",
+          "line-cap": "round",
+        },
+        paint: {
+          "line-color": "#1a1a1a",
+          "line-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 14,
+            14, 18,
+            18, 20,
+          ],
+          "line-blur": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10, 6,
+            14, 8,
+            18, 10,
+          ],
+          "line-opacity": 0.22,
+        },
       })
     }
     if (!map.getLayer(CDMX_METRO_LINE_LAYER_ID)) {
@@ -297,6 +591,8 @@ export function MapboxCanvas({
         source: CDMX_METRO_SOURCE_ID,
         layout: {
           visibility: "none",
+          "line-join": "round",
+          "line-cap": "round",
         },
         paint: {
           "line-color": ["coalesce", ["get", "color"], "#666666"],
@@ -306,21 +602,106 @@ export function MapboxCanvas({
       })
     }
 
-    // Keep aura layers above style layers so the portal edge remains visible.
-    if (map.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)
-    if (map.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
-    if (map.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
-    if (map.getLayer(CDMX_METRO_LINE_LAYER_ID)) map.moveLayer(CDMX_METRO_LINE_LAYER_ID)
-  }, [isReady, mapStyle, projection])
+    // Events + stations source and layers (GPU, no DOM markers)
+    if (!map.getSource(CDMX_EVENTS_SOURCE_ID)) {
+      map.addSource(CDMX_EVENTS_SOURCE_ID, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      })
+    }
+    if (!map.getLayer(METRO_STATIONS_LAYER_ID)) {
+      map.addLayer({
+        id: METRO_STATIONS_LAYER_ID,
+        type: "circle",
+        source: CDMX_EVENTS_SOURCE_ID,
+        minzoom: 9,
+        filter: ["==", ["get", "type"], "station"],
+        paint: {
+          "circle-radius": [
+            "case",
+            ["get", "hasStory"],
+            10,
+            8,
+          ],
+          "circle-color": [
+            "case",
+            ["get", "hasStory"],
+            "rgba(0,163,224,0.85)",
+            "rgba(0,163,224,0.5)",
+          ],
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "rgba(212,201,168,0.6)",
+        },
+      })
+    }
+    if (!map.getLayer(EVENTS_LAYER_ID)) {
+      map.addLayer({
+        id: EVENTS_LAYER_ID,
+        type: "symbol",
+        source: CDMX_EVENTS_SOURCE_ID,
+        minzoom: 12,
+        filter: ["==", ["get", "type"], "event"],
+        layout: {
+          "icon-image": ["get", "symbol"],
+          "icon-size": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12, 0.5,
+            15, 0.7,
+            18, 1,
+          ],
+          "icon-allow-overlap": false,
+          "icon-ignore-placement": false,
+        },
+      })
+    }
+
+      // Keep aura layers above style layers so the portal edge remains visible.
+      if (map.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)
+      if (map.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
+      if (map.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)
+      if (map.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
+      if (map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) map.moveLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)
+      if (map.getLayer(CDMX_METRO_LINE_LAYER_ID)) map.moveLayer(CDMX_METRO_LINE_LAYER_ID)
+      if (map.getLayer(METRO_STATIONS_LAYER_ID)) map.moveLayer(METRO_STATIONS_LAYER_ID)
+      if (map.getLayer(EVENTS_LAYER_ID)) map.moveLayer(EVENTS_LAYER_ID)
+
+      applyPrecipitation()
+    }
+
+    const runLayersAndLandmarks = () => {
+      devLog("[map] runLayersAndLandmarks")
+      addCustomLayers()
+      loadMapIcons().catch(() => {})
+      loadLandmarksFromApi()
+    }
+
+    const onIdle = () => {
+      devLog("[map] idle, running layers and landmarks")
+      runLayersAndLandmarks()
+      map.off("idle", onIdle)
+    }
+    if (map.isStyleLoaded()) {
+      runLayersAndLandmarks()
+    } else {
+      devLog("[map] style not loaded, waiting for idle")
+      map.once("idle", onIdle)
+    }
+    return () => map.off("idle", onIdle)
+  }, [isReady, mapStyle, projection, mapboxRain.enabled, mapboxRain.color, mapboxSnow.enabled, mapboxSnow.color])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
     const map = mapRef.current
-    const visibility = showMetroLines ? "visible" : "none"
+    const visibility = showMetro ? "visible" : "none"
+    if (map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) {
+      map.setLayoutProperty(CDMX_METRO_LINE_GLOW_LAYER_ID, "visibility", visibility)
+    }
     if (map.getLayer(CDMX_METRO_LINE_LAYER_ID)) {
       map.setLayoutProperty(CDMX_METRO_LINE_LAYER_ID, "visibility", visibility)
     }
-  }, [isReady, showMetroLines])
+  }, [isReady, showMetro])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -328,7 +709,7 @@ export function MapboxCanvas({
     const paint = getBoundaryGlowPaints(boundaryGlow)
     const visibility = boundaryGlow.enabled ? "visible" : "none"
 
-    ;[CDMX_BOUNDARY_VEIL_LAYER_ID, CDMX_BOUNDARY_GLOW_LAYER_ID, CDMX_BOUNDARY_LINE_LAYER_ID].forEach((layerId) => {
+    ;[CDMX_BOUNDARY_VEIL_LAYER_ID, CDMX_BOUNDARY_GLOW_LAYER_ID, CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID, CDMX_BOUNDARY_LINE_LAYER_ID].forEach((layerId) => {
       if (map.getLayer(layerId)) {
         map.setLayoutProperty(layerId, "visibility", visibility)
       }
@@ -359,91 +740,172 @@ export function MapboxCanvas({
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    const source = map.getSource(CDMX_EVENTS_SOURCE_ID) as mapboxgl.GeoJSONSource | undefined
+    if (!source) return
 
-    markersRef.current.forEach((m) => m.remove())
-    markersRef.current = []
+    const geoJSON = buildEventsGeoJSON(
+      events,
+      metroStations,
+      showEventsAndStations,
+      showMetro,
+      metroStories
+    )
+    source.setData(geoJSON)
+  }, [events, metroStations, showEventsAndStations, showMetro, metroStories, isReady])
 
-    events.forEach((event) => {
-      const el = document.createElement("div")
-      el.className = "mapbox-marker"
-      el.dataset.eventId = event.id
-      const symbol = EVENT_TYPE_TO_SYMBOL[event.type] ?? "vela"
-      const isSelected = selectedEventId === event.id
-      el.innerHTML = getMarkerSvg(symbol, isSelected, Math.round(markerSize * 0.85))
-      el.style.cursor = "pointer"
-      el.style.width = `${Math.round(markerSize)}px`
-      el.style.height = `${Math.round(markerSize)}px`
-      el.style.display = "flex"
-      el.style.alignItems = "center"
-      el.style.justifyContent = "center"
-      el.style.filter = isSelected
-        ? "drop-shadow(0 0 14px rgba(139,115,85,0.95)) drop-shadow(0 0 28px rgba(139,115,85,0.65)) drop-shadow(0 0 44px rgba(180,150,100,0.35))"
-        : "drop-shadow(0 0 10px rgba(74,124,111,0.65)) drop-shadow(0 0 18px rgba(74,124,111,0.4)) drop-shadow(0 0 30px rgba(74,124,111,0.25))"
-      // Animate only the internal svg to avoid overriding Mapbox marker transform.
-      const innerSvg = el.querySelector("svg")
-      if (innerSvg && typeof innerSvg.animate === "function") {
-        innerSvg.animate(
-          [
-            { transform: "translateY(0px)" },
-            { transform: "translateY(-3px)" },
-            { transform: "translateY(0px)" },
-          ],
-          {
-            duration: 2200 + Math.random() * 900,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        )
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    if (!map.getLayer(EVENTS_LAYER_ID)) return
+
+    const sel = selectedEventId ?? ""
+    map.setLayoutProperty(EVENTS_LAYER_ID, "icon-size", [
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      12,
+      ["case", ["==", ["get", "eventId"], sel], 0.65, 0.5],
+      15,
+      ["case", ["==", ["get", "eventId"], sel], 0.9, 0.7],
+      18,
+      ["case", ["==", ["get", "eventId"], sel], 1.2, 1],
+    ])
+  }, [selectedEventId, isReady])
+
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+
+    const onEventsClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapGeoJSONFeature[] }) => {
+      const f = e.features?.[0]
+      if (!f?.properties?.eventId) return
+      e.preventDefault()
+      onSelectEventRef.current((f.properties.eventId as string))
+    }
+
+    const onStationsClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapGeoJSONFeature[] }) => {
+      const f = e.features?.[0]
+      const props = f?.properties
+      if (!props?.stationId) return
+      e.preventDefault()
+      const hasStory = props.hasStory === true || props.hasStory === "true"
+      const storyId = String(props.storyId ?? "")
+      if (hasStory && storyId && onSelectMetroStoryRef.current) {
+        onSelectMetroStoryRef.current(storyId)
+      } else if (onSelectStationRef.current) {
+        onSelectStationRef.current(props.stationId as string)
       }
+    }
 
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([event.coords.lng, event.coords.lat])
-        .setOffset([0, markerOffsetY])
-        .addTo(mapRef.current!)
+    map.on("click", EVENTS_LAYER_ID, onEventsClick)
+    map.on("click", METRO_STATIONS_LAYER_ID, onStationsClick)
+    map.getCanvas().style.cursor = ""
+    const onEventsEnter = () => { map.getCanvas().style.cursor = "pointer" }
+    const onEventsLeave = () => { map.getCanvas().style.cursor = "" }
+    map.on("mouseenter", EVENTS_LAYER_ID, onEventsEnter)
+    map.on("mouseleave", EVENTS_LAYER_ID, onEventsLeave)
+    map.on("mouseenter", METRO_STATIONS_LAYER_ID, onEventsEnter)
+    map.on("mouseleave", METRO_STATIONS_LAYER_ID, onEventsLeave)
+    return () => {
+      map.off("click", EVENTS_LAYER_ID, onEventsClick)
+      map.off("click", METRO_STATIONS_LAYER_ID, onStationsClick)
+      map.off("mouseenter", EVENTS_LAYER_ID, onEventsEnter)
+      map.off("mouseleave", EVENTS_LAYER_ID, onEventsLeave)
+      map.off("mouseenter", METRO_STATIONS_LAYER_ID, onEventsEnter)
+      map.off("mouseleave", METRO_STATIONS_LAYER_ID, onEventsLeave)
+    }
+  }, [isReady])
 
-      el.addEventListener("click", () => onSelectEvent(event.id))
-      markersRef.current.push(marker)
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    if (!map.getLayer(METRO_STATIONS_LAYER_ID)) return
+    const visibility = showMetro ? "visible" : "none"
+    map.setLayoutProperty(METRO_STATIONS_LAYER_ID, "visibility", visibility)
+  }, [isReady, showMetro])
+
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    if (!map.getLayer(EVENTS_LAYER_ID)) return
+    const visibility = showEventsAndStations ? "visible" : "none"
+    map.setLayoutProperty(EVENTS_LAYER_ID, "visibility", visibility)
+  }, [isReady, showEventsAndStations])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const list = landmarksList
+    const idsInList = new Set(list.map((lm) => lm.id))
+    devLog("[map] landmarks effect run", { hasMap: !!map, isReady, listLength: list.length, ids: list.map((l) => l.id) })
+
+    if (!map || !isReady) {
+      const n = landmarksMarkersMapRef.current.size
+      landmarksMarkersMapRef.current.forEach(({ marker, root }) => {
+        marker.remove()
+        root.unmount()
+      })
+      landmarksMarkersMapRef.current.clear()
+      if (n > 0) devLog("[map] landmarks cleared (no map/ready), was", n)
+      return
+    }
+
+    const mapRef_ = landmarksMarkersMapRef.current
+
+    // Quitar marcadores que ya no están en la lista
+    mapRef_.forEach((obj, id) => {
+      if (!idsInList.has(id)) {
+        obj.marker.remove()
+        obj.root.unmount()
+        mapRef_.delete(id)
+        devLog("[map] landmark marker removed", id)
+      }
     })
 
-    // Metro station markers (only when showMetroLines and stations have stories)
-    metroMarkersRef.current.forEach((m) => m.remove())
-    metroMarkersRef.current = []
+    // Si no hay landmarks, listo
+    if (list.length === 0) return
 
-    if (showMetroLines && metroStories.length > 0 && onSelectMetroStory) {
-      const metroSize = Math.round(markerSize * 0.7)
-      const getMetroSvg = (selected: boolean) => {
-        const stroke = selected ? "rgba(212,201,168,0.95)" : "rgba(0,163,224,0.9)"
-        const fill = selected ? "rgba(139,115,85,0.2)" : "rgba(0,163,224,0.15)"
-        const textFill = selected ? "rgba(212,201,168,0.95)" : "rgba(0,163,224,0.95)"
-        return `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:${metroSize}px;height:${metroSize}px">
-          <circle cx="12" cy="12" r="9" stroke="${stroke}" stroke-width="1.5" fill="${fill}"/>
-          <text x="12" y="16" text-anchor="middle" font-size="10" font-weight="bold" fill="${textFill}">M</text>
-        </svg>`
+    // Añadir o actualizar marcador por cada landmark
+    list.forEach((lm) => {
+      const existing = mapRef_.get(lm.id)
+      const renderContent = () => (
+        <LandmarkParticleIcon
+          id={lm.id}
+          iconUrl={lm.icon_url || ""}
+          iconSvgUrl={lm.icon_svg_url}
+          name={lm.name}
+          onClick={() =>
+            onLandmarkClickRef.current?.(lm.name, lm.icon_url || "", lm.icon_svg_url)
+          }
+          particlesEnabled={false}
+        />
+      )
+
+      if (existing) {
+        devLog("[map] landmark update", { id: lm.id, hasSvg: !!lm.icon_svg_url })
+        existing.marker.setLngLat([lm.lng, lm.lat])
+        existing.root.render(renderContent())
+      } else {
+        devLog("[map] landmark add", { id: lm.id, hasSvg: !!lm.icon_svg_url })
+        const div = document.createElement("div")
+        const root = createRoot(div)
+        root.render(renderContent())
+        const marker = new mapboxgl.Marker({ element: div })
+          .setLngLat([lm.lng, lm.lat])
+          .addTo(map)
+        mapRef_.set(lm.id, { marker, root, div })
       }
-      metroStories.forEach((story) => {
-        const el = document.createElement("div")
-        el.className = "mapbox-marker mapbox-metro-marker"
-        el.dataset.storyId = story.id
-        const isSelected = selectedMetroStoryId === story.id
-        el.innerHTML = getMetroSvg(isSelected)
-        el.style.cursor = "pointer"
-        el.style.width = `${metroSize}px`
-        el.style.height = `${metroSize}px`
-        el.style.display = "flex"
-        el.style.alignItems = "center"
-        el.style.justifyContent = "center"
-        el.style.filter = isSelected
-          ? "drop-shadow(0 0 10px rgba(139,115,85,0.8)) drop-shadow(0 0 20px rgba(139,115,85,0.5))"
-          : "drop-shadow(0 0 8px rgba(0,163,224,0.6))"
-        const marker = new mapboxgl.Marker({ element: el })
-          .setLngLat([story.coords.lng, story.coords.lat])
-          .setOffset([0, markerOffsetY])
-          .addTo(mapRef.current!)
-        el.addEventListener("click", () => onSelectMetroStory(story.id))
-        metroMarkersRef.current.push(marker)
+    })
+
+    return () => {
+      devLog("[map] landmarks effect cleanup", { count: mapRef_.size })
+      mapRef_.forEach(({ marker, root }) => {
+        marker.remove()
+        root.unmount()
       })
+      mapRef_.clear()
     }
-  }, [events, selectedEventId, selectedMetroStoryId, isReady, onSelectEvent, onSelectMetroStory, markerOffsetY, markerSize, showMetroLines, metroStories])
+  }, [isReady, landmarksList])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -547,7 +1009,7 @@ export function MapboxCanvas({
     const heatmapLayerId = "events-heatmap"
     const heatmapSourceId = "events-heatmap-source"
 
-    if (showDensity && events.length > 0) {
+    if (showDensityEffective && events.length > 0) {
       if (!mapRef.current.getSource(heatmapSourceId)) {
         mapRef.current.addSource(heatmapSourceId, {
           type: "geojson",
@@ -557,7 +1019,7 @@ export function MapboxCanvas({
               type: "Feature" as const,
               geometry: {
                 type: "Point" as const,
-                coordinates: [e.coords.lng, e.coords.lat],
+                coordinates: [roundCoord(e.coords.lng), roundCoord(e.coords.lat)],
               },
               properties: { intensity: parseInt(e.intensity, 10) || 3 },
             })),
@@ -601,7 +1063,7 @@ export function MapboxCanvas({
             type: "Feature" as const,
             geometry: {
               type: "Point" as const,
-              coordinates: [e.coords.lng, e.coords.lat],
+              coordinates: [roundCoord(e.coords.lng), roundCoord(e.coords.lat)],
             },
             properties: { intensity: parseInt(e.intensity, 10) || 3 },
           })),
@@ -614,11 +1076,16 @@ export function MapboxCanvas({
       }
     }
 
-    // Keep CDMX aura above heatmap when density layer is toggled/updated.
+    // Keep CDMX aura and point layers above heatmap when density layer is toggled/updated.
     if (mapRef.current.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)
     if (mapRef.current.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
+    if (mapRef.current.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)
     if (mapRef.current.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
-  }, [showDensity, events, isReady])
+    if (mapRef.current.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)
+    if (mapRef.current.getLayer(CDMX_METRO_LINE_LAYER_ID)) mapRef.current.moveLayer(CDMX_METRO_LINE_LAYER_ID)
+    if (mapRef.current.getLayer(METRO_STATIONS_LAYER_ID)) mapRef.current.moveLayer(METRO_STATIONS_LAYER_ID)
+    if (mapRef.current.getLayer(EVENTS_LAYER_ID)) mapRef.current.moveLayer(EVENTS_LAYER_ID)
+  }, [showDensityEffective, events, isReady])
 
   const cfg = mapConfig
   const f = cfg?.filter ?? { sepia: 0, hueRotate: 0, saturate: 100, contrast: 100, brightness: 100 }
@@ -636,13 +1103,18 @@ export function MapboxCanvas({
       }
     : undefined
 
+  const styleSupportsNativePrecipitation = mapStyle?.includes?.("mapbox/standard") ?? false
   const showMist = cfg?.overlays?.mist ?? false
   const showVignette = cfg?.overlays?.vignette ?? false
   const showAtmospheric = cfg?.overlays?.atmospheric ?? false
+  const showRain =
+    (cfg?.overlays?.rain ?? false) || (mapboxRain.enabled && !styleSupportsNativePrecipitation)
+  const showSnow = mapboxSnow.enabled && !styleSupportsNativePrecipitation
   const zoomOverlayFactor = interpolateZoomFactor(zoom)
-  const mistOpacity = ((cfg?.opacity?.mist ?? 70) / 100) * zoomOverlayFactor
+  const mistOpacity = ((cfg?.opacity?.mist ?? 50) / 100) * zoomOverlayFactor
   const vignetteOpacity = ((cfg?.opacity?.vignette ?? 100) / 100) * zoomOverlayFactor
-  const atmosphericOpacity = ((cfg?.opacity?.atmospheric ?? 100) / 100) * zoomOverlayFactor
+  const atmosphericOpacity = ((cfg?.opacity?.atmospheric ?? 80) / 100) * zoomOverlayFactor
+  const rainOpacity = (cfg?.opacity?.rain ?? 65) / 100
 
   if (!mapboxgl.accessToken) {
     return (
@@ -671,40 +1143,47 @@ export function MapboxCanvas({
         <div
           ref={containerRef}
           id="map"
-          style={{ width: "100%", height: "100%" }}
+          style={{ width: "100%", height: "100%", position: "relative", zIndex: 0 }}
         />
 
-        {showMist && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            aria-hidden
-            style={{
-              background: `
-                radial-gradient(ellipse 60% 45% at 38% 52%, rgba(26,48,64,0.45) 0%, transparent 70%),
-                radial-gradient(ellipse 50% 40% at 72% 35%, rgba(30,43,40,0.35) 0%, transparent 65%),
-                radial-gradient(ellipse 40% 30% at 55% 75%, rgba(17,24,32,0.4) 0%, transparent 60%)
-              `,
-              opacity: mistOpacity,
-              zIndex: 1,
-            }}
-          />
-        )}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ zIndex: 20 }}
+          aria-hidden
+        >
+          {showMist && (
+            <div
+              className="absolute inset-0"
+              aria-hidden
+              style={{
+                background: `
+                  radial-gradient(ellipse 60% 45% at 38% 52%, rgba(26,48,64,0.45) 0%, transparent 70%),
+                  radial-gradient(ellipse 50% 40% at 72% 35%, rgba(30,43,40,0.35) 0%, transparent 65%),
+                  radial-gradient(ellipse 40% 30% at 55% 75%, rgba(17,24,32,0.4) 0%, transparent 60%)
+                `,
+                opacity: mistOpacity,
+              }}
+            />
+          )}
 
-        {showVignette && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            aria-hidden
-            style={{
-              background: "radial-gradient(ellipse 90% 85% at 50% 50%, transparent 50%, rgba(5,8,10,0.7) 100%)",
-              opacity: vignetteOpacity,
-              zIndex: 2,
-            }}
-          />
-        )}
+          {showVignette && (
+            <div
+              className="absolute inset-0"
+              aria-hidden
+              style={{
+                background: "radial-gradient(ellipse 90% 85% at 50% 50%, transparent 50%, rgba(5,8,10,0.7) 100%)",
+                opacity: vignetteOpacity,
+              }}
+            />
+          )}
 
-        {showAtmospheric && (
-          <AtmosphericOverlay zoom={zoom} opacity={atmosphericOpacity} />
-        )}
+          {showAtmospheric && (
+            <AtmosphericOverlay zoom={zoom} opacity={atmosphericOpacity} />
+          )}
+
+          {showRain && <RainOverlay opacity={rainOpacity} />}
+          {showSnow && <SnowOverlay opacity={0.6} />}
+        </div>
       </div>
 
       {/* Controls label */}
@@ -715,52 +1194,6 @@ export function MapboxCanvas({
       </div>
     </div>
   )
-}
-
-function getMarkerSvg(symbol: string, selected: boolean, size: number): string {
-  const scale = selected ? 1.35 : 1
-  const opacity = selected ? 1 : 0.8
-  const svgStyle = `width:${size}px;height:${size}px;transform:scale(${scale});opacity:${opacity}`
-
-  const svgs: Record<string, string> = {
-    vela: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <path d="M12 10 C12 10 10 7 11 4.5 C12 2 14 3.5 14 5.5 C14 8 12 10 12 10Z" fill="rgba(200,160,80,0.85)"/>
-      <line x1="12" y1="10" x2="12" y2="13" stroke="rgba(180,140,60,0.6)" stroke-width="1"/>
-      <rect x="9.5" y="13" width="5" height="8" rx="1" fill="rgba(200,170,100,0.7)"/>
-      <ellipse cx="12" cy="21" rx="3" ry="0.8" fill="rgba(139,115,85,0.4)"/>
-    </svg>`,
-    grieta: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <path d="M5 4 L10 10 L8 12 L15 20" stroke="rgba(74,124,111,0.8)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M10 10 L16 7" stroke="rgba(74,124,111,0.4)" stroke-width="0.8" stroke-linecap="round"/>
-    </svg>`,
-    hilo: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <path d="M3 12 C6 8 10 18 14 12 C18 6 22 16 24 12" stroke="rgba(180,150,100,0.75)" stroke-width="1.2" stroke-linecap="round"/>
-      <line x1="14" y1="8" x2="14" y2="5" stroke="rgba(180,150,100,0.5)" stroke-width="0.8"/>
-      <line x1="14" y1="16" x2="14" y2="20" stroke="rgba(180,150,100,0.4)" stroke-width="0.7" stroke-dasharray="1.5 1.5"/>
-    </svg>`,
-    puerta: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <rect x="6" y="3" width="12" height="18" rx="0.5" stroke="rgba(160,184,160,0.7)" stroke-width="1.2"/>
-      <circle cx="16" cy="12" r="1" fill="rgba(160,184,160,0.6)"/>
-      <line x1="6" y1="3" x2="6" y2="21" stroke="rgba(160,184,160,0.25)" stroke-width="0.5"/>
-    </svg>`,
-    documento: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <path d="M6 4 L12 4 L15 7 L15 20 L6 20 Z" stroke="rgba(139,115,85,0.8)" stroke-width="1.2" stroke-linejoin="round"/>
-      <path d="M12 4 L12 7 L15 7" stroke="rgba(139,115,85,0.6)" stroke-width="1.2" stroke-linejoin="round"/>
-      <line x1="8" y1="10" x2="13" y2="10" stroke="rgba(180,150,100,0.6)" stroke-width="0.8"/>
-      <line x1="8" y1="13" x2="13" y2="13" stroke="rgba(180,150,100,0.5)" stroke-width="0.8"/>
-    </svg>`,
-    germen: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <ellipse cx="12" cy="20" rx="3" ry="1.5" stroke="rgba(74,124,111,0.6)" stroke-width="0.9"/>
-      <path d="M12 16 C12 12 9 9 12 5 C15 9 12 12 12 16" stroke="rgba(160,184,160,0.8)" stroke-width="1.2" stroke-linecap="round"/>
-      <circle cx="12" cy="6" r="1.5" fill="rgba(200,170,100,0.6)"/>
-    </svg>`,
-    cruz: `<svg viewBox="0 0 24 24" fill="none" style="${svgStyle}">
-      <line x1="12" y1="2" x2="12" y2="22" stroke="rgba(139,115,85,0.7)" stroke-width="1.2"/>
-      <line x1="4" y1="12" x2="20" y2="12" stroke="rgba(139,115,85,0.7)" stroke-width="1.2"/>
-      <circle cx="12" cy="12" r="3" stroke="rgba(139,115,85,0.4)" stroke-width="0.8"/>
-    </svg>`,
-  }
-  return svgs[symbol] ?? svgs.vela
 }
 
 function createSoulOrbElement(color: string): HTMLDivElement {
@@ -805,10 +1238,10 @@ function createMaterializationElement(size: number): HTMLDivElement {
 }
 
 function interpolateZoomFactor(zoom: number): number {
-  if (zoom <= 10) return 0.3
+  if (zoom <= 10) return 0.85
   if (zoom >= 18) return 0.2
-  if (zoom <= 14) return lerp(0.3, 0.6, (zoom - 10) / 4)
-  return lerp(0.6, 0.2, (zoom - 14) / 4)
+  if (zoom <= 14) return lerp(0.85, 0.7, (zoom - 10) / 4)
+  return lerp(0.7, 0.2, (zoom - 14) / 4)
 }
 
 function lerp(a: number, b: number, t: number): number {
@@ -835,6 +1268,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, 0.06 * veilScale,
+      8, 0.08 * veilScale,
       10, 0.02 * veilScale,
       13, 0.045 * veilScale,
       16, 0.08 * veilScale,
@@ -844,6 +1279,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, 0.7 * glowScale,
+      8, 0.65 * glowScale,
       10, 0.35 * glowScale,
       13, 0.55 * glowScale,
       16, 0.78 * glowScale,
@@ -853,6 +1290,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, glowWidth * 0.5,
+      8, glowWidth * 0.45,
       10, glowWidth * 0.35,
       13, glowWidth * 0.6,
       16, glowWidth * 0.9,
@@ -862,6 +1301,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, glowBlur * 0.8,
+      8, glowBlur * 0.7,
       10, glowBlur * 0.4,
       13, glowBlur * 0.65,
       16, glowBlur * 0.9,
@@ -871,6 +1312,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, 0.9 * lineScale,
+      8, 0.85 * lineScale,
       10, 0.45 * lineScale,
       13, 0.66 * lineScale,
       16, 0.88 * lineScale,
@@ -880,6 +1323,8 @@ function getBoundaryGlowPaints(config: BoundaryGlowConfig) {
       "interpolate",
       ["linear"],
       ["zoom"],
+      5, lineWidth * 0.9,
+      8, lineWidth * 0.75,
       10, lineWidth * 0.45,
       13, lineWidth * 0.65,
       16, lineWidth * 0.88,

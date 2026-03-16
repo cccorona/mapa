@@ -3,7 +3,6 @@
 import { useState, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
-import { createClient } from "@/lib/supabase/client"
 
 function LoginForm() {
   const router = useRouter()
@@ -19,9 +18,16 @@ function LoginForm() {
     setError(null)
     setLoading(true)
     try {
-      const supabase = createClient()
-      const { error: err } = await supabase.auth.signInWithPassword({ email, password })
-      if (err) throw err
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        credentials: "include",
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error ?? "Error al iniciar sesión")
+      }
       router.push(redirect)
       router.refresh()
     } catch (err) {

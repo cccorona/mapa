@@ -193,6 +193,84 @@
   animation: popup-shards-flicker 420ms ease-in-out 1;
 }
 
+/* Rain overlay - streaky rain visible at default opacity */
+.rain-layer {
+  position: absolute;
+  inset: -50%;
+  background: repeating-linear-gradient(
+    105deg,
+    transparent 0px,
+    transparent 32px,
+    rgba(255, 255, 255, 0.18) 32px,
+    rgba(255, 255, 255, 0.18) 35px
+  );
+  animation: rain-fall linear infinite;
+}
+.rain-layer-1 { animation-duration: 0.85s; }
+.rain-layer-2 {
+  background: repeating-linear-gradient(
+    98deg,
+    transparent 0px,
+    transparent 42px,
+    rgba(255, 255, 255, 0.14) 42px,
+    rgba(255, 255, 255, 0.14) 45px
+  );
+  animation-duration: 1s;
+}
+.rain-layer-3 {
+  background: repeating-linear-gradient(
+    92deg,
+    transparent 0px,
+    transparent 28px,
+    rgba(255, 255, 255, 0.1) 28px,
+    rgba(255, 255, 255, 0.1) 31px
+  );
+  animation-duration: 0.7s;
+}
+@keyframes rain-fall {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+/* Snow overlay */
+.snow-layer {
+  position: absolute;
+  inset: -50%;
+  background: repeating-linear-gradient(
+    85deg,
+    transparent 0px,
+    transparent 80px,
+    rgba(255, 255, 255, 0.06) 80px,
+    rgba(255, 255, 255, 0.06) 82px
+  );
+  animation: snow-fall linear infinite;
+}
+.snow-layer-1 { animation-duration: 2.2s; }
+.snow-layer-2 {
+  background: repeating-linear-gradient(
+    95deg,
+    transparent 0px,
+    transparent 100px,
+    rgba(255, 255, 255, 0.05) 100px,
+    rgba(255, 255, 255, 0.05) 103px
+  );
+  animation-duration: 2.8s;
+}
+.snow-layer-3 {
+  background: repeating-linear-gradient(
+    78deg,
+    transparent 0px,
+    transparent 65px,
+    rgba(255, 255, 255, 0.04) 65px,
+    rgba(255, 255, 255, 0.04) 68px
+  );
+  animation-duration: 2.4s;
+}
+@keyframes snow-fall {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
 .ethereal-loader-backdrop {
   position: absolute;
   inset: 0;

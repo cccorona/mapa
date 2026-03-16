@@ -1,11 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useState, memo } from "react"
 import { cn } from "@/lib/utils"
 import type { ObservationEvent } from "@/lib/data"
 import { EVENT_TYPES as DOMAIN_TYPES, EMOTIONAL_INTENSITY_SCALE } from "@/lib/constants"
 import { getSymbolForType } from "@/lib/icons"
-import { TYPE_ICONS_BY_SYMBOL } from "@/lib/type-icons"
+import { SymbolIcon } from "@/components/symbol-icon"
 import type { MapConfig, ArtisticMode, LightPreset } from "@/lib/map-config"
 import { ARTISTIC_PRESETS, DEFAULT_MAP_CONFIG, exportMapConfig } from "@/lib/map-config"
 
@@ -30,6 +30,7 @@ const INTENSITY_LEVELS = [
 ]
 
 const MAP_STYLES = [
+  { value: "mapbox://styles/ccoronacesar/cmmqs03ui008e01s1028b1h27", label: "CDMX simplificado" },
   { value: "mapbox://styles/mapbox/standard", label: "Standard (3D)" },
   { value: "mapbox://styles/mapbox/light-v11", label: "Claro" },
   { value: "mapbox://styles/mapbox/dark-v11", label: "Oscuro" },
@@ -108,6 +109,7 @@ interface MapPanelProps {
     intensity: string
     showDensity: boolean
     showMetroLines: boolean
+    showAllLayers?: boolean
     dateFrom: string
     dateTo: string
   }
@@ -117,7 +119,7 @@ interface MapPanelProps {
   showMapTestPanel?: boolean
 }
 
-export function MapPanel({
+const MapPanelInner = ({
   events,
   selectedEventId,
   onSelectEvent,
@@ -128,8 +130,9 @@ export function MapPanel({
   mapConfig,
   onMapConfigChange,
   showMapTestPanel = false,
-}: MapPanelProps) {
+}: MapPanelProps) => {
   const [expandedSection, setExpandedSection] = useState<string | null>("filtros")
+  const [expandedTestSubpanel, setExpandedTestSubpanel] = useState<string | null>(null)
 
   const filteredEvents = events.filter((e) => {
     if (filters.type !== "all" && e.type !== filters.type) return false
@@ -345,17 +348,47 @@ export function MapPanel({
                   </button>
                 </div>
 
-                {/* Metro lines toggle */}
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)]">
-                    Mostrar líneas del Metro
+              </div>
+            )}
+          </div>
+
+          {/* Capas adicionales */}
+          <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+            <button
+              className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
+              onClick={() => setExpandedSection(expandedSection === "capas-adicionales" ? null : "capas-adicionales")}
+              aria-expanded={expandedSection === "capas-adicionales"}
+            >
+              <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Capas adicionales</span>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="none"
+                className={cn("transition-transform duration-300", expandedSection === "capas-adicionales" ? "rotate-180" : "")}
+                aria-hidden
+              >
+                <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+
+            {expandedSection === "capas-adicionales" && (
+              <div className="px-6 pb-5 space-y-3">
+                {/* Líneas del Metro */}
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="flex-shrink-0">
+                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.8" />
+                      <text x="12" y="16" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor">M</text>
+                    </svg>
+                    Líneas del Metro
                   </span>
                   <button
                     role="switch"
                     aria-checked={filters.showMetroLines}
                     onClick={() => onFilterChange("showMetroLines", !filters.showMetroLines)}
                     className={cn(
-                      "relative w-8 h-4 rounded-full border transition-all duration-300",
+                      "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
                       filters.showMetroLines
                         ? "border-[var(--primary)] bg-[var(--primary)]/20"
                         : "border-[var(--panel-border)] bg-transparent"
@@ -371,6 +404,7 @@ export function MapPanel({
                     />
                   </button>
                 </div>
+                {/* Futuro: Metrobús, Ecobici, etc. - añadir aquí */}
               </div>
             )}
           </div>
@@ -397,7 +431,81 @@ export function MapPanel({
               </button>
 
               {expandedSection === "prueba-mapa" && mapConfig && onMapConfigChange && (
-                <div className="px-6 pb-5 space-y-4 max-h-[60vh] overflow-y-auto">
+                <>
+                  <div className="flex items-center justify-between gap-3 px-6 py-3 border-b border-[var(--panel-border)] flex-wrap">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[10px] tracking-[0.12em] text-[var(--parchment-dim)]">
+                        Mostrar todo (metro + eventos)
+                      </span>
+                      <button
+                        role="switch"
+                        aria-checked={filters.showAllLayers ?? false}
+                        onClick={() => onFilterChange("showAllLayers", !(filters.showAllLayers ?? false))}
+                        className={cn(
+                          "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
+                          filters.showAllLayers
+                            ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                            : "border-[var(--panel-border)] bg-transparent"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                            filters.showAllLayers ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                          )}
+                        />
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const json = exportMapConfig(mapConfig)
+                        const blob = new Blob([json], { type: "application/json" })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement("a")
+                        a.href = url
+                        a.download = `mapa-config-${new Date().toISOString().slice(0, 19).replace(/[:-]/g, "")}.json`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="py-1.5 px-3 border border-[var(--sepia)]/50 rounded-sm font-mono text-[10px] text-[var(--parchment)] hover:bg-[var(--sepia)]/10 transition-colors"
+                    >
+                      Guardar parámetros
+                    </button>
+                  </div>
+                  <div className="max-h-[60vh] overflow-y-auto">
+                    {(["estilo", "capas", "borde", "lluvia-nieve", "orbe", "filtro", "popup"] as const).map((id) => (
+                      <div key={id} className="border-b border-[var(--panel-border)]">
+                        <button
+                          type="button"
+                          className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
+                          onClick={() => setExpandedTestSubpanel(expandedTestSubpanel === id ? null : id)}
+                          aria-expanded={expandedTestSubpanel === id}
+                        >
+                          <span className="font-mono text-[11px] tracking-[0.15em] uppercase">
+                            {id === "estilo" && "Estilo y vista"}
+                            {id === "capas" && "Capas"}
+                            {id === "borde" && "Borde CDMX"}
+                            {id === "lluvia-nieve" && "Lluvia / Nieve"}
+                            {id === "orbe" && "Orbe alma"}
+                            {id === "filtro" && "Filtro"}
+                            {id === "popup" && "Popup / lectura"}
+                          </span>
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 10 10"
+                            fill="none"
+                            className={cn("transition-transform duration-300", expandedTestSubpanel === id ? "rotate-180" : "")}
+                            aria-hidden
+                          >
+                            <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        {expandedTestSubpanel === id && (
+                          <div className="px-6 pb-4 space-y-4">
+                            {id === "estilo" && (
+                              <>
                   <div>
                     <label className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-2">
                       Estilo base
@@ -595,16 +703,30 @@ export function MapPanel({
                       className="w-full h-1.5 rounded-full appearance-none bg-[var(--panel-border)] accent-[var(--primary)]"
                     />
                   </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
+                              </>
+                            )}
+                            {id === "capas" && (
+                              <>
                     <span className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-3">
                       Capas
                     </span>
+                    <details className="mb-3 group">
+                      <summary className="font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] cursor-pointer list-none flex items-center gap-1.5 [&::-webkit-details-marker]:hidden">
+                        <span className="transition-transform group-open:rotate-90">›</span>
+                        Ayuda: qué es cada capa
+                      </summary>
+                      <div className="mt-2 pl-4 border-l border-[var(--panel-border)] font-mono text-[9px] text-[var(--parchment-dim)] space-y-2">
+                        <p><strong>Estilo Standard (3D):</strong> lluvia y nieve usan partículas nativas de Mapbox. <strong>Otros estilos</strong> (CDMX, Claro, Satélite…): lluvia y nieve son overlays CSS encima del mapa.</p>
+                        <p><strong>Atmosférico:</strong> niebla en bordes + respiración (shader). <strong>Niebla:</strong> bruma con gradientes. <strong>Viñeta:</strong> oscurecimiento en bordes. <strong>Lluvia:</strong> aquí o en subpanel Lluvia/Nieve (en no-Standard activa overlay CSS). <strong>Nieve:</strong> solo desde Lluvia/Nieve.</p>
+                        <p className="opacity-70">Documentación completa: <code className="text-[var(--sepia)]">docs/capas-mapa.md</code></p>
+                      </div>
+                    </details>
                     <div className="space-y-2">
                       {[
                         { key: "atmospheric" as const, label: "Atmosférico (shader)" },
                         { key: "mist" as const, label: "Niebla" },
                         { key: "vignette" as const, label: "Viñeta" },
+                        { key: "rain" as const, label: "Lluvia" },
                       ].map(({ key, label }) => (
                         <div key={key} className="flex items-center justify-between gap-2">
                           <span className="font-mono text-[10px] text-[var(--parchment-dim)]">{label}</span>
@@ -629,8 +751,8 @@ export function MapPanel({
                                 "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
                                 mapConfig.overlays[key] ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
                               )}
-                            />
-                          </button>
+                          />
+                        </button>
                         </div>
                       ))}
                     </div>
@@ -639,6 +761,7 @@ export function MapPanel({
                         { key: "atmospheric" as const, label: "Opac. atmosf." },
                         { key: "mist" as const, label: "Opac. niebla" },
                         { key: "vignette" as const, label: "Opac. viñeta" },
+                        { key: "rain" as const, label: "Opac. lluvia" },
                       ].map(({ key, label }) => (
                         <div key={key}>
                           <label className="block font-mono text-[9px] text-[var(--parchment-dim)] mb-0.5">
@@ -660,12 +783,10 @@ export function MapPanel({
                         </div>
                       ))}
                     </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
-                    <span className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-3">
-                      Borde CDMX / Glow
-                    </span>
+                              </>
+                            )}
+                            {id === "borde" && (
+                              <>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Mostrar borde CDMX</span>
@@ -731,12 +852,121 @@ export function MapPanel({
                         </div>
                       ))}
                     </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
-                    <span className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-3">
-                      Orbe alma
-                    </span>
+                              </>
+                            )}
+                            {id === "lluvia-nieve" && (
+                              <>
+                    <p className="font-mono text-[9px] text-[var(--parchment-dim)] opacity-70 mb-2">
+                      Efectos nativos Mapbox GL 3.9+ (partículas)
+                    </p>
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Lluvia</span>
+                          <button
+                            role="switch"
+                            aria-checked={mapConfig.mapboxRain?.enabled ?? false}
+                            onClick={() =>
+                              onMapConfigChange({
+                                ...mapConfig,
+                                mapboxRain: {
+                                  ...(mapConfig.mapboxRain ?? DEFAULT_MAP_CONFIG.mapboxRain),
+                                  enabled: !(mapConfig.mapboxRain?.enabled ?? false),
+                                },
+                              })
+                            }
+                            className={cn(
+                              "relative w-8 h-4 rounded-full border transition-all duration-300",
+                              mapConfig.mapboxRain?.enabled
+                                ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                                : "border-[var(--panel-border)] bg-transparent"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                                mapConfig.mapboxRain?.enabled ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                              )}
+                            />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[9px] text-[var(--parchment-dim)]">Color:</span>
+                          <input
+                            type="color"
+                            value={mapConfig.mapboxRain?.color ?? "#a8adbc"}
+                            onChange={(e) =>
+                              onMapConfigChange({
+                                ...mapConfig,
+                                mapboxRain: {
+                                  ...(mapConfig.mapboxRain ?? DEFAULT_MAP_CONFIG.mapboxRain),
+                                  color: e.target.value,
+                                },
+                              })
+                            }
+                            className="w-8 h-6 rounded border border-[var(--panel-border)] cursor-pointer bg-transparent"
+                          />
+                          <span className="font-mono text-[9px] text-[var(--parchment-dim)]">
+                            {mapConfig.mapboxRain?.color ?? "#a8adbc"}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Nieve</span>
+                          <button
+                            role="switch"
+                            aria-checked={mapConfig.mapboxSnow?.enabled ?? false}
+                            onClick={() =>
+                              onMapConfigChange({
+                                ...mapConfig,
+                                mapboxSnow: {
+                                  ...(mapConfig.mapboxSnow ?? DEFAULT_MAP_CONFIG.mapboxSnow),
+                                  enabled: !(mapConfig.mapboxSnow?.enabled ?? false),
+                                },
+                              })
+                            }
+                            className={cn(
+                              "relative w-8 h-4 rounded-full border transition-all duration-300",
+                              mapConfig.mapboxSnow?.enabled
+                                ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                                : "border-[var(--panel-border)] bg-transparent"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                                mapConfig.mapboxSnow?.enabled ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                              )}
+                            />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[9px] text-[var(--parchment-dim)]">Color:</span>
+                          <input
+                            type="color"
+                            value={mapConfig.mapboxSnow?.color ?? "#ffffff"}
+                            onChange={(e) =>
+                              onMapConfigChange({
+                                ...mapConfig,
+                                mapboxSnow: {
+                                  ...(mapConfig.mapboxSnow ?? DEFAULT_MAP_CONFIG.mapboxSnow),
+                                  color: e.target.value,
+                                },
+                              })
+                            }
+                            className="w-8 h-6 rounded border border-[var(--panel-border)] cursor-pointer bg-transparent"
+                          />
+                          <span className="font-mono text-[9px] text-[var(--parchment-dim)]">
+                            {mapConfig.mapboxSnow?.color ?? "#ffffff"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                              </>
+                            )}
+                            {id === "orbe" && (
+                              <>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Activar orbe</span>
@@ -830,12 +1060,10 @@ export function MapPanel({
                         </div>
                       </div>
                     </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
-                    <span className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-3">
-                      Paleta / filtro
-                    </span>
+                              </>
+                            )}
+                            {id === "filtro" && (
+                              <>
                     {[
                       { key: "sepia" as const, label: "Sepia", min: 0, max: 100 },
                       { key: "hueRotate" as const, label: "Hue", min: -180, max: 180 },
@@ -862,12 +1090,10 @@ export function MapPanel({
                         />
                       </div>
                     ))}
-                  </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
-                    <span className="block font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--parchment-dim)] mb-3">
-                      Popup / lectura
-                    </span>
+                              </>
+                            )}
+                            {id === "popup" && (
+                              <>
                     <div className="flex items-center gap-1.5 mb-3">
                       {[
                         { key: "etereo", label: "Etéreo" },
@@ -920,27 +1146,14 @@ export function MapPanel({
                         />
                       </div>
                     ))}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-
-                  <div className="pt-2 border-t border-[var(--panel-border)]">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const json = exportMapConfig(mapConfig)
-                        const blob = new Blob([json], { type: "application/json" })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement("a")
-                        a.href = url
-                        a.download = `mapa-config-${new Date().toISOString().slice(0, 19).replace(/[:-]/g, "")}.json`
-                        a.click()
-                        URL.revokeObjectURL(url)
-                      }}
-                      className="w-full py-2 px-3 border border-[var(--sepia)]/50 rounded-sm font-mono text-[10px] text-[var(--parchment)] hover:bg-[var(--sepia)]/10 transition-colors"
-                    >
-                      Guardar parámetros
-                    </button>
-                  </div>
-                </div>
+                </>
               )}
             </div>
           )}
@@ -996,7 +1209,7 @@ export function MapPanel({
                                 : "text-[var(--parchment-dim)] group-hover:text-[var(--primary)]"
                             )}
                           >
-                            {TYPE_ICONS_BY_SYMBOL[getSymbolForType(event.type)] ?? TYPE_ICONS_BY_SYMBOL.vela}
+                            <SymbolIcon name={getSymbolForType(event.type)} size={16} />
                           </span>
 
                           <div className="flex-1 min-w-0">
@@ -1054,3 +1267,5 @@ export function MapPanel({
     </aside>
   )
 }
+
+export const MapPanel = memo(MapPanelInner)

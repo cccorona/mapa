@@ -1,0 +1,149 @@
+{
+  "version": 8,
+  "name": "CDMX simplificado - look vintage",
+  "center": [-99.13, 19.43],
+  "zoom": 11,
+  "bearing": 0,
+  "pitch": 0,
+  "sources": {
+    "composite": {
+      "url": "mapbox://mapbox.mapbox-streets-v8",
+      "type": "vector"
+    }
+  },
+  "sprite": "mapbox://sprites/mapbox/light-v11",
+  "glyphs": "mapbox://fonts/mapbox/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#e8dfc8",
+        "background-opacity": 1
+      }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "composite",
+      "source-layer": "landuse",
+      "minzoom": 0,
+      "maxzoom": 22,
+      "filter": ["in", ["get", "class"], ["literal", ["park", "pitch", "cemetery", "grass", "wood", "nature_reserve"]]],
+      "paint": {
+        "fill-color": "#c4b896",
+        "fill-opacity": 0.5
+      }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "composite",
+      "source-layer": "water",
+      "paint": {
+        "fill-color": "#9da88a",
+        "fill-opacity": 0.7
+      }
+    },
+    {
+      "id": "waterway",
+      "type": "line",
+      "source": "composite",
+      "source-layer": "waterway",
+      "minzoom": 8,
+      "paint": {
+        "line-color": "#9da88a",
+        "line-width": 1.5
+      }
+    },
+    {
+      "id": "road-major",
+      "type": "line",
+      "source": "composite",
+      "source-layer": "road",
+      "filter": ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary", "secondary"]]],
+      "layout": {
+        "line-join": "round",
+        "line-cap": "round"
+      },
+      "paint": {
+        "line-color": [
+          "match",
+          ["get", "class"],
+          "motorway", "#6b5b4a",
+          "trunk", "#7d6d5a",
+          "primary", "#8b7d6a",
+          "secondary", "#9a8d7a",
+          "#8b7d6a"
+        ],
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          10, 1.5,
+          14, 3,
+          18, 5
+        ]
+      }
+    },
+    {
+      "id": "road-major-label",
+      "type": "symbol",
+      "source": "composite",
+      "source-layer": "road",
+      "minzoom": 12,
+      "filter": ["all", ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary", "secondary"]]], ["has", "name"]],
+      "layout": {
+        "symbol-placement": "line",
+        "text-field": ["get", "name"],
+        "text-size": 11,
+        "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"],
+        "symbol-spacing": 300
+      },
+      "paint": {
+        "text-color": "#5a4d3d",
+        "text-halo-color": "#e8dfc8",
+        "text-halo-width": 2
+      }
+    },
+    {
+      "id": "place-label-city",
+      "type": "symbol",
+      "source": "composite",
+      "source-layer": "place_label",
+      "filter": ["in", ["get", "type"], ["literal", ["city", "town"]]],
+      "layout": {
+        "text-field": ["get", "name"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 8, 12, 14, 16],
+        "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"]
+      },
+      "paint": {
+        "text-color": "#4a4035",
+        "text-halo-color": "#e8dfc8",
+        "text-halo-width": 1.5
+      }
+    },
+    {
+      "id": "poi-monument-park",
+      "type": "symbol",
+      "source": "composite",
+      "source-layer": "poi_label",
+      "minzoom": 13,
+      "filter": ["in", ["get", "maki"], ["literal", ["monument", "park", "museum", "attraction", "landmark", "theatre", "castle", "place-of-worship"]]],
+      "layout": {
+        "icon-image": ["get", "maki"],
+        "icon-size": 0.9,
+        "text-field": ["get", "name"],
+        "text-offset": [0, 1.5],
+        "text-size": 11,
+        "text-font": ["DIN Pro Regular", "Arial Unicode MS Regular"]
+      },
+      "paint": {
+        "icon-color": "#6b5b4a",
+        "text-color": "#5a4d3d",
+        "text-halo-color": "#e8dfc8",
+        "text-halo-width": 1.5
+      }
+    }
+  ]
+}

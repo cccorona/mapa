@@ -1,0 +1,28 @@
+{
+  "type": "FeatureCollection",
+  "name": "landmarks-cdmx",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "icon": "bellas_artes",
+        "name": "Palacio de Bellas Artes"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-99.1412, 19.4342]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "icon": "torre_latino",
+        "name": "Torre Latinoamericana"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-99.1520, 19.4330]
+      }
+    }
+  ]
+}

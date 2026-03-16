@@ -5,13 +5,15 @@ import type { ObservationEvent } from "@/types/event"
 type EventRow = {
   id: string
   event_type: string
-  location: unknown
   occurred_at: string
   description: string
   title: string | null
   location_label: string | null
   emotional_intensity: string
   is_anonymous: boolean
+  lat?: number
+  lng?: number
+  location?: unknown
 }
 
 function parseLocation(loc: unknown): { lat: number; lng: number } {
@@ -23,7 +25,14 @@ function parseLocation(loc: unknown): { lat: number; lng: number } {
 }
 
 function rowToEvent(row: EventRow): ObservationEvent {
-  const { lat, lng } = parseLocation(row.location)
+  const lat =
+    typeof row.lat === "number" && Number.isFinite(row.lat)
+      ? row.lat
+      : parseLocation(row.location).lat
+  const lng =
+    typeof row.lng === "number" && Number.isFinite(row.lng)
+      ? row.lng
+      : parseLocation(row.location).lng
   return {
     id: row.id,
     title: row.title ?? row.description.slice(0, 50),
@@ -113,4 +122,23 @@ export async function createEvent(input: CreateEventInput): Promise<ObservationE
 
   if (error) throw error
   return rowToEvent(data as EventRow)
+}
+
+export async function updateEventLocation(
+  eventId: string,
+  lat: number,
+  lng: number,
+  locationLabel?: string
+): Promise<ObservationEvent> {
+  const supabase = createClient()
+  const { data, error } = await supabase.rpc("update_event_location", {
+    p_event_id: eventId,
+    p_lat: lat,
+    p_lng: lng,
+    p_location_label: locationLabel ?? null,
+  })
+  if (error) throw error
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row) throw new Error("Event not found")
+  return rowToEvent(row as EventRow)
 }
