@@ -53,3 +53,25 @@ export function groupEventsByCoords<T extends { coords: { lat: number; lng: numb
   }
   return map
 }
+
+/** Clave de ubicación: containerId si existe, si no coordKey(lat, lng). */
+export function locationKey<T extends { coords: { lat: number; lng: number }; containerId?: string }>(
+  event: T
+): string {
+  if (event.containerId) return event.containerId
+  return coordKey(event.coords.lat, event.coords.lng)
+}
+
+/** Agrupa eventos por contenedor (containerId) o por coordenadas; para popup/slide. */
+export function groupEventsByLocation<
+  T extends { coords: { lat: number; lng: number }; containerId?: string }
+>(events: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>()
+  for (const e of events) {
+    const key = locationKey(e)
+    const group = map.get(key) ?? []
+    group.push(e)
+    map.set(key, group)
+  }
+  return map
+}

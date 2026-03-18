@@ -12,10 +12,11 @@ import { StationPopup } from "@/components/station-popup"
 import { LandmarkParticlesOverlay } from "@/components/landmark-particles-overlay"
 import { getEventsInBounds } from "@/lib/services/events"
 import type { ObservationEvent } from "@/types/event"
-import { METRO_STATIONS, METRO_STORIES } from "@/lib/metro-data"
-import { cn, coordKey, filterEventsInBounds, groupEventsByCoords } from "@/lib/utils"
+import { eventMatchesStation, getStationCodeForName } from "@/lib/event-layers"
+import { cn, filterEventsInBounds, groupEventsByLocation, locationKey } from "@/lib/utils"
 import { CDMX_BOUNDS, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
-import { getDefaultMapConfig, type MapConfig } from "@/lib/map-config"
+import { getDefaultMapConfig, DEFAULT_MAP_CONFIG, type MapConfig } from "@/lib/map-config"
+import { ParticlesOverlay } from "@/components/particles-overlay"
 
 const DEFAULT_FILTERS = {
   type: "all",
@@ -23,11 +24,13 @@ const DEFAULT_FILTERS = {
   showDensity: false,
   showMetroLines: false,
   showAllLayers: false,
+  visibleGroups: {} as Record<string, boolean>,
   dateFrom: "",
   dateTo: "",
 }
 
 const IS_PRD = process.env.NEXT_PUBLIC_PRD === "true"
+const IS_DEV = process.env.NODE_ENV === "development"
 
 function EtherealLoader({ fullscreen = false, fading = false }: { fullscreen?: boolean; fading?: boolean }) {
   return (
@@ -56,9 +59,16 @@ function MapaDeObservacionesContent() {
   const searchParams = useSearchParams()
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
-  const [filters, setFilters] = useState(() =>
-    IS_PRD ? { ...DEFAULT_FILTERS, showMetroLines: true } : DEFAULT_FILTERS
-  )
+  const [filters, setFilters] = useState(() => DEFAULT_FILTERS)
+  const visibleGroupCodes = Object.keys(filters.visibleGroups ?? {}).filter((k) => filters.visibleGroups?.[k])
+  const [escenografiaLayers, setEscenografiaLayers] = useState<{ id: string }[]>([])
+  const [escenografiaVisible, setEscenografiaVisible] = useState<Record<string, boolean>>({})
+  const [layerGeodataByGroup, setLayerGeodataByGroup] = useState<
+    Record<string, { id: string; name: string; type: string }[]>
+  >({})
+  const [visibleLayerGeodata, setVisibleLayerGeodata] = useState<
+    Record<string, Record<string, boolean>>
+  >({})
   const [zoom, setZoom] = useState(CDMX_DEFAULT_ZOOM)
   const [mapConfig, setMapConfig] = useState(() => getDefaultMapConfig(IS_PRD))
   const [mapReadyPhase, setMapReadyPhase] = useState<MapReadyPhase>(hasMapboxToken ? "booting" : "ready")
@@ -139,15 +149,61 @@ function MapaDeObservacionesContent() {
     return () => clearPopupTransitionTimer()
   }, [clearPopupTransitionTimer])
 
-  const filteredEvents = events.filter((e) => {
-    if (filters.type !== "all" && e.type !== filters.type) return false
-    if (filters.intensity !== "all" && e.intensity !== filters.intensity) return false
-    if (filters.dateFrom && e.date < filters.dateFrom) return false
-    if (filters.dateTo && e.date > filters.dateTo) return false
-    return true
-  })
+  // Al activar un grupo, cargar layer_geodata y poblar sub-toggles (todos visibles por defecto).
+  useEffect(() => {
+    const groupsToLoad = Object.keys(filters.visibleGroups ?? {}).filter(
+      (code) => filters.visibleGroups?.[code] && !layerGeodataByGroup[code]
+    )
+    if (groupsToLoad.length === 0) return
+    groupsToLoad.forEach((groupCode) => {
+      fetch(`/api/layer-geodata?group_code=${encodeURIComponent(groupCode)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((list: Array<{ id: string | number; name: string; type: string }>) => {
+          const items = (list ?? []).map(({ id, name, type }) => ({
+            id: String(id),
+            name,
+            type,
+          }))
+          setLayerGeodataByGroup((prev) => ({ ...prev, [groupCode]: items }))
+          const byId: Record<string, boolean> = {}
+          items.forEach(({ id }) => {
+            byId[id] = true
+          })
+          setVisibleLayerGeodata((prev) => ({ ...prev, [groupCode]: byId }))
+        })
+        .catch(() => {})
+    })
+  }, [filters.visibleGroups, layerGeodataByGroup])
 
-  const selectedMetroStory = METRO_STORIES.find((s) => s.id === popupMetroStoryId) ?? null
+  const handleVisibleLayerGeodataChange = useCallback(
+    (groupCode: string, layerGeodataId: string, visible: boolean) => {
+      setVisibleLayerGeodata((prev) => ({
+        ...prev,
+        [groupCode]: {
+          ...(prev[groupCode] ?? {}),
+          [layerGeodataId]: visible,
+        },
+      }))
+    },
+    []
+  )
+
+  const filteredEvents = events
+    .filter((e) => {
+      if (filters.type !== "all" && e.type !== filters.type) return false
+      if (filters.intensity !== "all" && e.intensity !== filters.intensity) return false
+      if (filters.dateFrom && e.date < filters.dateFrom) return false
+      if (filters.dateTo && e.date > filters.dateTo) return false
+      return true
+    })
+    .filter((e) => {
+      if (visibleGroupCodes.length > 0) {
+        return !e.group || visibleGroupCodes.includes(e.group)
+      }
+      return true
+    })
+
+  const selectedMetroStory = null
 
   const handleSelectEvent = useCallback((id: string) => {
     setMobileDrawerOpen(false)
@@ -158,9 +214,9 @@ function MapaDeObservacionesContent() {
     if (!clickedEvent) return
     if (popupEventsAtPoint.some((e) => e.id === id)) return
 
-    const groupsByCoords = groupEventsByCoords(filteredEvents)
-    const key = coordKey(clickedEvent.coords.lat, clickedEvent.coords.lng)
-    const group = groupsByCoords.get(key) ?? [clickedEvent]
+    const groupsByLocation = groupEventsByLocation(filteredEvents)
+    const key = locationKey(clickedEvent)
+    const group = groupsByLocation.get(key) ?? [clickedEvent]
     clearPopupTransitionTimer()
 
     const animDuration = Math.max(250, mapConfig.popupConfig.animDuration)
@@ -345,34 +401,7 @@ function MapaDeObservacionesContent() {
     []
   )
 
-  const [metroStationsFromGeoJSON, setMetroStationsFromGeoJSON] = useState<typeof METRO_STATIONS>([])
-  useEffect(() => {
-    if (!filters.showMetroLines && !filters.showAllLayers) return
-    fetch("/cdmx-metro-stations.geojson")
-      .then((r) => r.json())
-      .then((fc: { features?: Array<{ geometry: { coordinates: [number, number] }; properties: { name?: string; line?: string }; id?: string }> }) => {
-        const stations =
-          fc.features?.map((f, i) => {
-            const lineRaw = f.properties?.line ?? "?"
-            const line = String(lineRaw).replace(/^0+/, "") || String(lineRaw)
-            return {
-              id: f.id ?? `st-geo-${i}`,
-              name: f.properties?.name ?? "?",
-              line,
-              coords: {
-                lat: f.geometry?.coordinates?.[1] ?? 0,
-                lng: f.geometry?.coordinates?.[0] ?? 0,
-              },
-            }
-          }) ?? []
-        setMetroStationsFromGeoJSON(stations)
-      })
-      .catch(() => setMetroStationsFromGeoJSON(METRO_STATIONS))
-  }, [filters.showMetroLines, filters.showAllLayers])
-
-  const metroStationsForMap = metroStationsFromGeoJSON.length > 0 ? metroStationsFromGeoJSON : METRO_STATIONS
-
-  const filteredMetroStories = filterEventsInBounds(METRO_STORIES, CDMX_BOUNDS)
+  const metroStationsForMap: { id: string; name: string; line: string; coords: { lat: number; lng: number } }[] = []
 
   const handleBoundsChange = useCallback((bounds: { north: number; south: number; east: number; west: number }) => {
     setMapBounds(bounds)
@@ -450,6 +479,12 @@ function MapaDeObservacionesContent() {
             onToggleCollapse={() => setPanelCollapsed((v) => !v)}
             filters={filters}
             onFilterChange={handleFilterChange}
+            layerGeodataByGroup={layerGeodataByGroup}
+            visibleLayerGeodata={visibleLayerGeodata}
+            onVisibleLayerGeodataChange={handleVisibleLayerGeodataChange}
+            escenografiaLayers={escenografiaLayers}
+            escenografiaVisible={escenografiaVisible}
+            onEscenografiaChange={setEscenografiaVisible}
             mapConfig={mapConfig}
             onMapConfigChange={handleMapConfigChange}
             showMapTestPanel={hasMapboxToken && !IS_PRD}
@@ -488,6 +523,12 @@ function MapaDeObservacionesContent() {
               onToggleCollapse={() => setMobileDrawerOpen(false)}
               filters={filters}
               onFilterChange={handleFilterChange}
+              layerGeodataByGroup={layerGeodataByGroup}
+              visibleLayerGeodata={visibleLayerGeodata}
+              onVisibleLayerGeodataChange={handleVisibleLayerGeodataChange}
+              escenografiaLayers={escenografiaLayers}
+              escenografiaVisible={escenografiaVisible}
+              onEscenografiaChange={setEscenografiaVisible}
               mapConfig={mapConfig}
               onMapConfigChange={handleMapConfigChange}
               showMapTestPanel={hasMapboxToken && !IS_PRD}
@@ -511,10 +552,10 @@ function MapaDeObservacionesContent() {
                 highlightedEventId={null}
                 onSelectEvent={handleSelectEvent}
                 showDensity={filters.showDensity}
-                showMetroLines={filters.showMetroLines}
-                showAllLayers={filters.showAllLayers}
+                visibleGroups={filters.visibleGroups}
+                visibleLayerGeodata={visibleLayerGeodata}
                 metroStations={metroStationsForMap}
-                metroStories={filteredMetroStories}
+                metroStories={[]}
                 selectedMetroStoryId={selectedMetroStoryId}
                 onSelectMetroStory={handleSelectMetroStory}
                 onSelectStation={handleSelectStation}
@@ -526,6 +567,8 @@ function MapaDeObservacionesContent() {
                 bearing={mapConfig.bearing}
                 mapConfig={mapConfig}
                 zoom={zoom}
+                escenografiaVisible={escenografiaVisible}
+                onEscenografiaLayersLoaded={setEscenografiaLayers}
                 onReadyPhaseChange={handleMapReadyPhaseChange}
               />
             </div>
@@ -536,10 +579,21 @@ function MapaDeObservacionesContent() {
               highlightedEventId={null}
               onSelectEvent={handleSelectEvent}
               showDensity={filters.showDensity}
-              showMetroLines={filters.showMetroLines}
+              showMetroLines={visibleGroupCodes.length > 0}
               onZoomChange={setZoom}
             />
           )}
+
+          {/* Partículas: capa encima del mapa, independiente de Mapbox */}
+          <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10 }}>
+            <ParticlesOverlay
+              enabled={(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay).enabled}
+              count={(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay).count}
+              size={(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay).size}
+              opacity={(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay).opacity}
+              speed={(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay).speed}
+            />
+          </div>
 
           {hasMapboxToken && showLoader && <EtherealLoader fading={isLoaderFading} />}
 
@@ -555,6 +609,28 @@ function MapaDeObservacionesContent() {
           {/* Station popup (stations without story) */}
           <StationPopup
             station={(popupStationId ? metroStationsForMap.find((s) => s.id === popupStationId) : null) ?? null}
+            eventsAtStation={
+              popupStationId
+                ? (() => {
+                    const station = metroStationsForMap.find((s) => s.id === popupStationId)
+                    if (!station) return []
+                    const line = String(station.line).replace(/^0+/, "") || station.line
+                    const stationDetailCode = line === "2" ? getStationCodeForName(station.name) : null
+                    const stationLayer = "METRO"
+                    const stationSublayer = line === "2" ? "LINEA2" : ""
+                    return filteredEvents.filter((e) =>
+                      eventMatchesStation(
+                        e.layer,
+                        e.sublayer,
+                        e.sublayerDetail,
+                        stationLayer,
+                        stationSublayer,
+                        stationDetailCode
+                      )
+                    )
+                  })()
+                : []
+            }
             onClose={handleClosePopup}
             popupConfig={mapConfig.popupConfig}
             phase={popupPhase}

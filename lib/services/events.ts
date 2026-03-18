@@ -14,6 +14,11 @@ type EventRow = {
   lat?: number
   lng?: number
   location?: unknown
+  group?: string | null
+  layer?: string | null
+  sublayer?: string | null
+  sublayer_detail?: string | null
+  location_container_id?: string | null
 }
 
 function parseLocation(loc: unknown): { lat: number; lng: number } {
@@ -43,6 +48,11 @@ function rowToEvent(row: EventRow): ObservationEvent {
     description: row.description,
     location: row.location_label ?? undefined,
     coords: { lat, lng },
+    group: row.group ?? undefined,
+    layer: row.layer ?? undefined,
+    sublayer: row.sublayer ?? undefined,
+    sublayerDetail: row.sublayer_detail ?? undefined,
+    containerId: row.location_container_id ?? undefined,
   }
 }
 
@@ -110,14 +120,15 @@ export async function createEvent(input: CreateEventInput): Promise<ObservationE
   const supabase = createClient()
   const { data, error } = await supabase.rpc("create_event", {
     p_event_type: parsed.data.event_type,
-    p_lng: parsed.data.lng,
-    p_lat: parsed.data.lat,
+    p_lng: parsed.data.lng ?? null,
+    p_lat: parsed.data.lat ?? null,
     p_occurred_at: occurredAt,
     p_description: parsed.data.description,
     p_title: parsed.data.title ?? null,
     p_location_label: parsed.data.location ?? null,
     p_emotional_intensity: parsed.data.emotional_intensity,
     p_is_anonymous: parsed.data.is_anonymous,
+    p_location_container_id: parsed.data.location_container_id ?? null,
   })
 
   if (error) throw error
@@ -128,7 +139,11 @@ export async function updateEventLocation(
   eventId: string,
   lat: number,
   lng: number,
-  locationLabel?: string
+  locationLabel?: string,
+  group?: string | null,
+  layer?: string | null,
+  sublayer?: string | null,
+  sublayerDetail?: string | null
 ): Promise<ObservationEvent> {
   const supabase = createClient()
   const { data, error } = await supabase.rpc("update_event_location", {
@@ -136,6 +151,10 @@ export async function updateEventLocation(
     p_lat: lat,
     p_lng: lng,
     p_location_label: locationLabel ?? null,
+    p_group: group ?? null,
+    p_layer: layer ?? null,
+    p_sublayer: sublayer ?? null,
+    p_sublayer_detail: sublayerDetail ?? null,
   })
   if (error) throw error
   const row = Array.isArray(data) ? data[0] : data

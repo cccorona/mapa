@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import type { ObservationEvent } from "@/lib/data"
 import type { MetroStory } from "@/types/metro"
-import { METRO_STATIONS } from "@/lib/metro-data"
 import { EVENT_TYPE_LABELS, INTENSITY_LABELS, getSymbolForType } from "@/lib/icons"
 import { SymbolIcon } from "@/components/symbol-icon"
 import type { PopupConfig } from "@/lib/map-config"
@@ -212,7 +211,7 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
                   {isMetroPopup ? (
                     <>
                       <span className="font-mono text-[11px] tracking-[0.16em] uppercase text-[var(--parchment-dim)] opacity-85">
-                        Estación {METRO_STATIONS.find((s) => s.id === (event as MetroStory).stationId)?.name ?? (event as MetroStory).stationId}
+                        Estación {(event as MetroStory).stationId ?? "—"}
                       </span>
                       <span className="w-px h-3 bg-[var(--panel-border)]" />
                       <span
@@ -269,7 +268,7 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
                     <path d="M5 6 L5 9" stroke="var(--parchment-dim)" strokeWidth="0.8" strokeLinecap="round" />
                   </svg>
                   <span className="font-mono text-[var(--parchment-dim)] opacity-85 italic" style={{ fontSize: `${popupConfig.metaSize + 1}px` }}>
-                    Estación {METRO_STATIONS.find((s) => s.id === (event as MetroStory).stationId)?.name ?? (event as MetroStory).stationId} · Línea {(event as MetroStory).line}
+                    Estación {(event as MetroStory).stationId ?? "—"} · Línea {(event as MetroStory).line}
                   </span>
                 </div>
               ) : (event as ObservationEvent).location && (

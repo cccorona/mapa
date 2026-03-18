@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, memo } from "react"
+import { useState, memo, useEffect } from "react"
 import { cn } from "@/lib/utils"
 import type { ObservationEvent } from "@/lib/data"
 import { EVENT_TYPES as DOMAIN_TYPES, EMOTIONAL_INTENSITY_SCALE } from "@/lib/constants"
@@ -110,10 +110,21 @@ interface MapPanelProps {
     showDensity: boolean
     showMetroLines: boolean
     showAllLayers?: boolean
+    /** Dominios del catálogo visibles en el mapa (code -> visible). */
+    visibleGroups?: Record<string, boolean>
     dateFrom: string
     dateTo: string
   }
-  onFilterChange: (key: string, value: string | boolean) => void
+  onFilterChange: (key: string, value: string | boolean | Record<string, boolean>) => void
+  /** Lista de layer_geodata por grupo (id, name) para sub-toggles. */
+  layerGeodataByGroup?: Record<string, { id: string; name: string; type: string }[]>
+  /** Visibilidad por grupo y layer_geodata id para sub-toggles. */
+  visibleLayerGeodata?: Record<string, Record<string, boolean>>
+  onVisibleLayerGeodataChange?: (groupCode: string, layerGeodataId: string, visible: boolean) => void
+  /** Capas del estilo Mapbox con id escenografia-* para toggles. */
+  escenografiaLayers?: { id: string }[]
+  escenografiaVisible?: Record<string, boolean>
+  onEscenografiaChange?: (visible: Record<string, boolean>) => void
   mapConfig?: MapConfig
   onMapConfigChange?: (config: MapConfig) => void
   showMapTestPanel?: boolean
@@ -128,13 +139,36 @@ const MapPanelInner = ({
   onToggleCollapse,
   filters,
   onFilterChange,
+  layerGeodataByGroup = {},
+  visibleLayerGeodata = {},
+  onVisibleLayerGeodataChange,
   mapConfig,
   onMapConfigChange,
+  escenografiaLayers = [],
+  escenografiaVisible = {},
+  onEscenografiaChange,
   showMapTestPanel = false,
   isPrd = false,
 }: MapPanelProps) => {
   const [expandedSection, setExpandedSection] = useState<string | null>("filtros")
   const [expandedTestSubpanel, setExpandedTestSubpanel] = useState<string | null>(null)
+  const [catalogGroups, setCatalogGroups] = useState<{ code: string; name: string }[]>([])
+
+  useEffect(() => {
+    fetch("/api/layer-catalog")
+      .then((r) => r.json())
+      .then((c: { hierarchy?: Record<string, unknown>; groups?: { code: string; name: string }[] }) => {
+        if (c?.groups && Array.isArray(c.groups)) {
+          setCatalogGroups(c.groups)
+        } else {
+          const h = c?.hierarchy
+          if (h && typeof h === "object") {
+            setCatalogGroups(Object.keys(h).map((code) => ({ code, name: code })))
+          }
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const filteredEvents = events.filter((e) => {
     if (filters.type !== "all" && e.type !== filters.type) return false
@@ -356,67 +390,157 @@ const MapPanelInner = ({
             )}
           </div>
 
-          {/* Capas adicionales - oculto en PRD (solo metro visible por default) */}
+          {/* Capas: toggles desde BD (layer_groups) */}
           {!isPrd && (
             <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
-                onClick={() => setExpandedSection(expandedSection === "capas-adicionales" ? null : "capas-adicionales")}
-                aria-expanded={expandedSection === "capas-adicionales"}
+                onClick={() => setExpandedSection(expandedSection === "capas" ? null : "capas")}
+                aria-expanded={expandedSection === "capas"}
               >
-                <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Capas adicionales</span>
+                <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Capas</span>
                 <svg
                   width="10"
                   height="10"
                   viewBox="0 0 10 10"
                   fill="none"
-                  className={cn("transition-transform duration-300", expandedSection === "capas-adicionales" ? "rotate-180" : "")}
+                  className={cn("transition-transform duration-300", expandedSection === "capas" ? "rotate-180" : "")}
                   aria-hidden
                 >
                   <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
 
-              {expandedSection === "capas-adicionales" && (
+              {expandedSection === "capas" && (
                 <div className="px-6 pb-5 space-y-3">
-                  {/* Líneas del Metro */}
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="flex-shrink-0">
-                        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.8" />
-                        <text x="12" y="16" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor">M</text>
-                      </svg>
-                      Líneas del Metro
-                    </span>
-                    <button
-                      role="switch"
-                      aria-checked={filters.showMetroLines}
-                      onClick={() => onFilterChange("showMetroLines", !filters.showMetroLines)}
-                      className={cn(
-                        "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
-                        filters.showMetroLines
-                          ? "border-[var(--primary)] bg-[var(--primary)]/20"
-                          : "border-[var(--panel-border)] bg-transparent"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
-                          filters.showMetroLines
-                            ? "left-4 bg-[var(--primary)]"
-                            : "left-0.5 bg-[var(--panel-border)]"
+                  {catalogGroups.map(({ code, name }) => {
+                    const visible = filters.visibleGroups?.[code] ?? false
+                    const layerGeodataItems = layerGeodataByGroup[code] ?? []
+                    return (
+                      <div key={code} className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden className="flex-shrink-0">
+                              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" strokeOpacity="0.8" />
+                              <text x="12" y="16" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor">M</text>
+                            </svg>
+                            {name}
+                          </span>
+                          <button
+                            role="switch"
+                            aria-checked={visible}
+                            onClick={() =>
+                              onFilterChange("visibleGroups", {
+                                ...filters.visibleGroups,
+                                [code]: !visible,
+                              })
+                            }
+                            className={cn(
+                              "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
+                              visible ? "border-[var(--primary)] bg-[var(--primary)]/20" : "border-[var(--panel-border)] bg-transparent"
+                            )}
+                          >
+                            <span
+                              className={cn(
+                                "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                                visible ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                              )}
+                            />
+                          </button>
+                        </div>
+                        {visible && layerGeodataItems.length > 0 && (
+                          <div className="space-y-1.5 mt-2">
+                            {layerGeodataItems.map((item) => {
+                              const subVisible = visibleLayerGeodata[code]?.[item.id] ?? true
+                              return (
+                                <label
+                                  key={item.id}
+                                  className="flex items-center gap-2 cursor-pointer group"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={subVisible}
+                                    onChange={() => onVisibleLayerGeodataChange?.(code, String(item.id), !subVisible)}
+                                    className="w-3.5 h-3.5 rounded border-[var(--panel-border)] bg-transparent text-[var(--primary)] focus:ring-[var(--primary)]/30"
+                                  />
+                                  <span className="font-mono text-[11px] tracking-[0.08em] text-[var(--parchment-dim)] truncate group-hover:text-[var(--parchment)]">
+                                    {item.name}
+                                  </span>
+                                </label>
+                              )
+                            })}
+                          </div>
                         )}
-                      />
-                    </button>
-                  </div>
-                  {/* Futuro: Metrobús, Ecobici, etc. - añadir aquí */}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
           )}
 
-          {/* Prueba mapa - solo si Mapbox activo y no PRD */}
-          {showMapTestPanel && mapConfig && onMapConfigChange && (
+          {/* Escenografía: capas del estilo Mapbox con id escenografia-* */}
+          {!isPrd && (
+            <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+              <button
+                className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
+                onClick={() => setExpandedSection(expandedSection === "escenografia" ? null : "escenografia")}
+                aria-expanded={expandedSection === "escenografia"}
+              >
+                <span className="font-mono text-[12px] tracking-[0.2em] uppercase">Escenografía</span>
+                <svg
+                  width="10"
+                  height="10"
+                  viewBox="0 0 10 10"
+                  fill="none"
+                  className={cn("transition-transform duration-300", expandedSection === "escenografia" ? "rotate-180" : "")}
+                  aria-hidden
+                >
+                  <polyline points="2,3 5,7 8,3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+
+              {expandedSection === "escenografia" && (
+                <div className="px-6 pb-5 space-y-3">
+                  {escenografiaLayers.map((layer) => {
+                    const visible = escenografiaVisible[layer.id] ?? false
+                    const label = layer.id.replace(/^escenografia-/, "") || layer.id
+                    return (
+                      <div key={layer.id} className="flex items-center justify-between gap-3">
+                        <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] flex items-center gap-2">
+                          {label}
+                        </span>
+                        <button
+                          role="switch"
+                          aria-checked={visible}
+                          onClick={() =>
+                            onEscenografiaChange?.({
+                              ...escenografiaVisible,
+                              [layer.id]: !visible,
+                            })
+                          }
+                          className={cn(
+                            "relative w-8 h-4 rounded-full border transition-all duration-300 flex-shrink-0",
+                            visible ? "border-[var(--primary)] bg-[var(--primary)]/20" : "border-[var(--panel-border)] bg-transparent"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                              visible ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                            )}
+                          />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Prueba mapa - oculto por diseño; capas dinámicas desde catálogo */}
+          {false && showMapTestPanel && mapConfig && onMapConfigChange && (
             <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
@@ -480,7 +604,7 @@ const MapPanelInner = ({
                     </button>
                   </div>
                   <div className="max-h-[60vh] overflow-y-auto">
-                    {(["estilo", "capas", "borde", "lluvia-nieve", "orbe", "filtro", "popup"] as const).map((id) => (
+                    {(["estilo", "capas", "borde", "lluvia-nieve", "orbe", "filtro", "popup", "particulas"] as const).map((id) => (
                       <div key={id} className="border-b border-[var(--panel-border)]">
                         <button
                           type="button"
@@ -496,6 +620,7 @@ const MapPanelInner = ({
                             {id === "orbe" && "Orbe alma"}
                             {id === "filtro" && "Filtro"}
                             {id === "popup" && "Popup / lectura"}
+                            {id === "particulas" && "Partículas"}
                           </span>
                           <svg
                             width="10"
@@ -1152,6 +1277,74 @@ const MapPanelInner = ({
                         />
                       </div>
                     ))}
+                              </>
+                            )}
+                            {id === "particulas" && (
+                              <>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Activado</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={mapConfig.particlesOverlay?.enabled ?? false}
+                          onClick={() =>
+                            onMapConfigChange({
+                              ...mapConfig,
+                              particlesOverlay: {
+                                ...(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay),
+                                enabled: !(mapConfig.particlesOverlay?.enabled ?? false),
+                              },
+                            })
+                          }
+                          className={cn(
+                            "relative w-8 h-4 rounded-full border transition-all duration-300",
+                            mapConfig.particlesOverlay?.enabled
+                              ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                              : "border-[var(--panel-border)] bg-transparent"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                              mapConfig.particlesOverlay?.enabled ? "left-4 bg-[var(--primary)]" : "left-0.5 bg-[var(--panel-border)]"
+                            )}
+                          />
+                        </button>
+                      </div>
+                      {[
+                        { key: "count" as const, label: "Cantidad", min: 100, max: 2000, step: 50 },
+                        { key: "size" as const, label: "Tamaño", min: 0.5, max: 4, step: 0.1 },
+                        { key: "opacity" as const, label: "Opacidad", min: 0.05, max: 1, step: 0.05 },
+                        { key: "speed" as const, label: "Velocidad", min: 0.1, max: 1.5, step: 0.05 },
+                      ].map(({ key, label, min, max, step }) => {
+                        const value = mapConfig.particlesOverlay?.[key] ?? (DEFAULT_MAP_CONFIG.particlesOverlay as typeof mapConfig.particlesOverlay)[key]
+                        return (
+                          <div key={key} className="mb-2">
+                            <label className="block font-mono text-[9px] text-[var(--parchment-dim)] mb-0.5">
+                              {label}: {typeof value === "number" && key === "opacity" ? `${Math.round(value * 100)}%` : value}
+                            </label>
+                            <input
+                              type="range"
+                              min={min}
+                              max={max}
+                              step={step}
+                              value={value as number}
+                              onChange={(e) =>
+                                onMapConfigChange({
+                                  ...mapConfig,
+                                  particlesOverlay: {
+                                    ...(mapConfig.particlesOverlay ?? DEFAULT_MAP_CONFIG.particlesOverlay),
+                                    [key]: Number(e.target.value),
+                                  },
+                                })
+                              }
+                              className="w-full h-1.5 rounded-full appearance-none bg-[var(--panel-border)] accent-[var(--primary)]"
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
                               </>
                             )}
                           </div>

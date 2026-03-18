@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 import type { MetroStation } from "@/types/metro"
+import type { ObservationEvent } from "@/types/event"
 import type { PopupConfig } from "@/lib/map-config"
 
 function MetroGlyph() {
@@ -18,12 +19,13 @@ function MetroGlyph() {
 
 interface StationPopupProps {
   station: MetroStation | null
+  eventsAtStation?: ObservationEvent[]
   onClose: () => void
   popupConfig: PopupConfig
   phase: "entering" | "visible" | "exiting"
 }
 
-export function StationPopup({ station, onClose, popupConfig, phase }: StationPopupProps) {
+export function StationPopup({ station, eventsAtStation = [], onClose, popupConfig, phase }: StationPopupProps) {
   const ref = useRef<HTMLDivElement>(null)
   const isOpen = !!station
   const durationMs = Math.max(200, popupConfig.animDuration)
@@ -159,12 +161,40 @@ export function StationPopup({ station, onClose, popupConfig, phase }: StationPo
             </div>
 
             <div className="px-6 py-5">
-              <p
-                className="font-serif leading-relaxed text-[var(--parchment)] opacity-80 italic"
-                style={{ fontSize: `${popupConfig.bodySize}px` }}
-              >
-                Sin historias aún. Ver eventos cercanos para explorar.
-              </p>
+              {eventsAtStation.length > 0 ? (
+                <ul className="space-y-3" aria-label="Eventos en esta estación">
+                  {eventsAtStation.map((ev) => (
+                    <li key={ev.id} className="border-b border-[var(--panel-border)]/50 pb-3 last:border-0 last:pb-0">
+                      <p
+                        className="font-serif font-medium text-[var(--parchment)] leading-snug"
+                        style={{ fontSize: `${popupConfig.bodySize}px` }}
+                      >
+                        {ev.title || ev.excerpt}
+                      </p>
+                      <p
+                        className="font-serif text-[var(--parchment-dim)] opacity-85 mt-1 line-clamp-2"
+                        style={{ fontSize: `${Math.max(11, popupConfig.bodySize - 1)}px` }}
+                      >
+                        {ev.excerpt}
+                      </p>
+                      <time
+                        className="font-mono text-[var(--parchment-dim)] opacity-70 mt-1 block"
+                        style={{ fontSize: `${Math.max(9, popupConfig.metaSize - 1)}px` }}
+                        dateTime={ev.date}
+                      >
+                        {new Date(ev.date).toLocaleDateString("es-ES")}
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p
+                  className="font-serif leading-relaxed text-[var(--parchment)] opacity-80 italic"
+                  style={{ fontSize: `${popupConfig.bodySize}px` }}
+                >
+                  Sin historias aún. Ver eventos cercanos para explorar.
+                </p>
+              )}
               <div className="mt-6 flex items-center gap-3">
                 <div className="flex-1 h-px bg-[var(--panel-border)] opacity-50" />
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>

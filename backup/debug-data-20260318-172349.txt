@@ -1,0 +1,36 @@
+=== DEBUG DATA ===
+
+events: total = 123
+events sample (5):
+  {"id":"b475681a-abc0-4cd4-ad24-92868602c466","status":"approved","occurred_at":"2021-03-14T12:00:00+00:00","group":"TRANSPORT","layer":"DEFAULT","sublayer":null,"sublayer_detail":null,"location_label":"Ciudad de México, Colonia Roma"}
+  {"id":"9b12bf9e-22fd-46c7-8e6d-a9ecf62baa98","status":"approved","occurred_at":"2019-08-22T12:00:00+00:00","group":"TRANSPORT","layer":"DEFAULT","sublayer":null,"sublayer_detail":null,"location_label":"Oaxaca, Centro Histórico"}
+  {"id":"84bb38d0-ae6e-49b6-b2d2-60257ccd2134","status":"approved","occurred_at":"2022-11-05T12:00:00+00:00","group":"TRANSPORT","layer":"DEFAULT","sublayer":null,"sublayer_detail":null,"location_label":"Buenos Aires, San Telmo"}
+  {"id":"6ed5914f-3423-49c1-81e5-03d243335cb1","status":"approved","occurred_at":"2020-06-30T12:00:00+00:00","group":"TRANSPORT","layer":"DEFAULT","sublayer":null,"sublayer_detail":null,"location_label":"Madrid, Lavapiés"}
+  {"id":"098cb27c-82e5-4826-8511-7fc0f7a8238e","status":"approved","occurred_at":"2023-02-01T12:00:00+00:00","group":"TRANSPORT","layer":"DEFAULT","sublayer":null,"sublayer_detail":null,"location_label":"Guadalajara, Tlaquepaque"}
+
+layer_groups: 2
+  NATURE (Naturaleza) id=9cedc84d-24dc-4cbc-9dd4-2c929c5bc443
+  TRANSPORT (Transporte) id=6e144098-b903-4607-a504-1bb3799adc3d
+
+layer_sublayers: 4
+  DEFAULT (Por defecto) group_id=6e144098-b903-4607-a504-1bb3799adc3d
+  JACARANDAS (Jacarandas) group_id=9cedc84d-24dc-4cbc-9dd4-2c929c5bc443
+  METRO (Metro) group_id=6e144098-b903-4607-a504-1bb3799adc3d
+  METROBUS (Metrobús) group_id=6e144098-b903-4607-a504-1bb3799adc3d
+
+layer_sub_sublayers: 25
+  ALLENDE (Allende)
+  BELLAS_ARTES (Bellas Artes)
+  CHABACANO (Chabacano)
+  COLEGIO_MILITAR (Colegio Militar)
+  CUATRO_CAMINOS (Cuatro Caminos)
+  CUITLAHUAC (Cuitláhuac)
+  ERMITA (Ermita)
+  GENERAL_ANAYA (General Anaya)
+  HIDALGO (Hidalgo)
+  L2 (Línea 2)
+  ... y más
+
+layer_geodata: total = 0
+
+=== FIN DEBUG ===

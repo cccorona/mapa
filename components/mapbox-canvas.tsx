@@ -14,7 +14,7 @@ import type { BoundaryGlowConfig, MapConfig } from "@/lib/map-config"
 import { AtmosphericOverlay } from "@/components/atmospheric-overlay"
 import { RainOverlay } from "@/components/rain-overlay"
 import { SnowOverlay } from "@/components/snow-overlay"
-import { METRO_STATIONS } from "@/lib/metro-data"
+import { getStationCodeForName } from "@/lib/event-layers"
 import { createClient } from "@/lib/supabase/client"
 import { LandmarkParticleIcon } from "@/components/landmark-particle-icon"
 import { devLog } from "@/lib/dev-log"
@@ -27,13 +27,24 @@ const CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID = "cdmx-boundary-portal-glow"
 const CDMX_BOUNDARY_LINE_LAYER_ID = "cdmx-boundary-line"
 const CDMX_BOUNDARY_VEIL_LAYER_ID = "cdmx-boundary-veil"
 const CDMX_BOUNDARY_GEOJSON_URL = "/cdmx-boundary.geojson"
-const CDMX_METRO_SOURCE_ID = "cdmx-metro-lines"
-const CDMX_METRO_LINE_GLOW_LAYER_ID = "cdmx-metro-line-glow"
-const CDMX_METRO_LINE_LAYER_ID = "cdmx-metro-line"
-const CDMX_METRO_GEOJSON_URL = "/cdmx-metro-lines.geojson"
 const CDMX_EVENTS_SOURCE_ID = "cdmx-events"
 const EVENTS_LAYER_ID = "events-layer"
 const METRO_STATIONS_LAYER_ID = "metro-stations-layer"
+
+const ESCENOGRAFIA_PREFIX = "escenografia-"
+
+function geodataSourceId(groupCode: string): string {
+  return `geodata-${groupCode}`
+}
+function geodataLineGlowLayerId(groupCode: string): string {
+  return `geodata-${groupCode}-line-glow`
+}
+function geodataLineLayerId(groupCode: string): string {
+  return `geodata-${groupCode}-line`
+}
+function geodataPointsLayerId(groupCode: string): string {
+  return `geodata-${groupCode}-points`
+}
 type LandmarkFromApi = {
   id: string
   name: string
@@ -58,18 +69,15 @@ function buildEventsGeoJSON(
   metroStations: MetroStation[],
   includeEvents: boolean,
   includeStations: boolean,
-  metroStories: MetroStory[]
+  metroStories: MetroStory[],
+  visibleGroupCodes: string[]
 ): { type: "FeatureCollection"; features: PointFeature[] } {
   const stationIdToStory = new Map(metroStories.map((s) => [s.stationId, s]))
   const nameToStory = new Map<string, MetroStory>()
   metroStories.forEach((story) => {
-    const station = METRO_STATIONS.find((s) => s.id === story.stationId)
-    const name = station?.name
-    if (name) {
-      nameToStory.set(name, story)
-      if (name === "Zócalo") nameToStory.set("Zócalo/Tenochtitlan", story)
-    }
+    nameToStory.set(story.stationId, story)
   })
+  const defaultGroup = visibleGroupCodes[0] ?? ""
 
   const eventFeatures: PointFeature[] = includeEvents
     ? events.map((e) => ({
@@ -79,7 +87,11 @@ function buildEventsGeoJSON(
           coordinates: [roundCoord(e.coords.lng), roundCoord(e.coords.lat)],
         },
         properties: {
-          type: "event",
+          group: e.group ?? defaultGroup,
+          sub_layer: e.layer ?? "DEFAULT",
+          sub_sub_layer: e.sublayerDetail ?? "",
+          type: "point" as const,
+          feature_type: "event" as const,
           eventId: e.id,
           eventType: e.type,
           intensity: e.intensity,
@@ -90,9 +102,10 @@ function buildEventsGeoJSON(
     : []
 
   const stationFeatures: PointFeature[] =
-    includeStations && metroStations.length > 0
+    includeStations && metroStations.length > 0 && visibleGroupCodes.length > 0
       ? metroStations.map((s) => {
           const story = stationIdToStory.get(s.id) ?? nameToStory.get(s.name)
+          const stationCode = getStationCodeForName(s.name) ?? ""
           return {
             type: "Feature" as const,
             geometry: {
@@ -100,7 +113,11 @@ function buildEventsGeoJSON(
               coordinates: [roundCoord(s.coords.lng), roundCoord(s.coords.lat)],
             },
             properties: {
-              type: "station",
+              group: defaultGroup,
+              sub_layer: "METRO",
+              sub_sub_layer: stationCode,
+              type: "point" as const,
+              feature_type: "station" as const,
               stationId: s.id,
               name: s.name,
               line: s.line,
@@ -124,9 +141,15 @@ interface MapboxCanvasProps {
   highlightedEventId: string | null
   onSelectEvent: (id: string) => void
   showDensity: boolean
-  showMetroLines?: boolean
-  showAllLayers?: boolean
+  /** Grupos visibles (code -> visible). Geodata se carga por group_code al activar. */
+  visibleGroups?: Record<string, boolean>
+  /** Por grupo, qué layer_geodata están visibles (id -> boolean). Filtra lo que se pinta. */
+  visibleLayerGeodata?: Record<string, Record<string, boolean>>
   metroStations?: MetroStation[]
+  /** Visibilidad por layer id para capas del estilo con id escenografia-* */
+  escenografiaVisible?: Record<string, boolean>
+  /** Callback cuando el estilo carga y se descubren capas escenografia-* */
+  onEscenografiaLayersLoaded?: (layers: { id: string }[]) => void
   metroStories?: MetroStory[]
   selectedMetroStoryId?: string | null
   onSelectMetroStory?: (id: string) => void
@@ -147,9 +170,11 @@ export function MapboxCanvas({
   selectedEventId,
   onSelectEvent,
   showDensity,
-  showMetroLines = false,
-  showAllLayers = false,
+  visibleGroups = {},
+  visibleLayerGeodata = {},
   metroStations = [],
+  escenografiaVisible = {},
+  onEscenografiaLayersLoaded,
   metroStories = [],
   selectedMetroStoryId = null,
   onSelectMetroStory,
@@ -195,8 +220,8 @@ export function MapboxCanvas({
   const boundaryGlow = mapConfig?.boundaryGlow ?? DEFAULT_MAP_CONFIG.boundaryGlow
   const mapboxRain = mapConfig?.mapboxRain ?? DEFAULT_MAP_CONFIG.mapboxRain
   const mapboxSnow = mapConfig?.mapboxSnow ?? DEFAULT_MAP_CONFIG.mapboxSnow
-  const showMetro = showMetroLines || showAllLayers
-  const showEventsAndStations = !showMetroLines || showAllLayers
+  const visibleGroupCodes = Object.keys(visibleGroups).filter((k) => visibleGroups[k])
+  const showEventsAndStations = true
   const showDensityEffective = showDensity && showEventsAndStations
   const emitReadyPhase = (phase: MapReadyPhase) => {
     if (currentReadyPhaseRef.current === phase) return
@@ -450,7 +475,8 @@ export function MapboxCanvas({
     const addCustomLayers = () => {
       devLog("[landmarks] addCustomLayers", { styleLoaded: map.isStyleLoaded() })
       if (!map.isStyleLoaded()) return
-      const initialBoundaryPaint = getBoundaryGlowPaints(DEFAULT_MAP_CONFIG.boundaryGlow)
+      const initialBoundaryPaint = getBoundaryGlowPaints(boundaryGlow)
+      const boundaryVisible = boundaryGlow.enabled ? "visible" : "none"
 
       if (!map.getSource(CDMX_BOUNDARY_SOURCE_ID)) {
         map.addSource(CDMX_BOUNDARY_SOURCE_ID, {
@@ -465,9 +491,7 @@ export function MapboxCanvas({
         id: CDMX_BOUNDARY_VEIL_LAYER_ID,
         type: "fill",
         source: CDMX_BOUNDARY_SOURCE_ID,
-        layout: {
-          visibility: DEFAULT_MAP_CONFIG.boundaryGlow.enabled ? "visible" : "none",
-        },
+        layout: { visibility: boundaryVisible },
         paint: {
           "fill-color": "#4a7c6f",
           "fill-opacity": initialBoundaryPaint.veilOpacity,
@@ -480,9 +504,7 @@ export function MapboxCanvas({
         id: CDMX_BOUNDARY_GLOW_LAYER_ID,
         type: "line",
         source: CDMX_BOUNDARY_SOURCE_ID,
-        layout: {
-          visibility: DEFAULT_MAP_CONFIG.boundaryGlow.enabled ? "visible" : "none",
-        },
+        layout: { visibility: boundaryVisible },
         paint: {
           "line-color": "#8b7355",
           "line-opacity": initialBoundaryPaint.glowOpacity,
@@ -497,9 +519,7 @@ export function MapboxCanvas({
         id: CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID,
         type: "line",
         source: CDMX_BOUNDARY_SOURCE_ID,
-        layout: {
-          visibility: DEFAULT_MAP_CONFIG.boundaryGlow.enabled ? "visible" : "none",
-        },
+        layout: { visibility: boundaryVisible },
         paint: {
           "line-color": "rgba(74, 180, 200, 0.4)",
           "line-opacity": [
@@ -534,9 +554,7 @@ export function MapboxCanvas({
         id: CDMX_BOUNDARY_LINE_LAYER_ID,
         type: "line",
         source: CDMX_BOUNDARY_SOURCE_ID,
-        layout: {
-          visibility: DEFAULT_MAP_CONFIG.boundaryGlow.enabled ? "visible" : "none",
-        },
+        layout: { visibility: boundaryVisible },
         paint: {
           "line-color": "#d4c9a8",
           "line-opacity": initialBoundaryPaint.lineOpacity,
@@ -545,94 +563,178 @@ export function MapboxCanvas({
       })
     }
 
-    // Metro lines: glow (tunnel) + colored lines
-    if (!map.getSource(CDMX_METRO_SOURCE_ID)) {
-      map.addSource(CDMX_METRO_SOURCE_ID, {
-        type: "geojson",
-        data: CDMX_METRO_GEOJSON_URL,
-      })
-    }
-    if (!map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) {
-      map.addLayer({
-        id: CDMX_METRO_LINE_GLOW_LAYER_ID,
-        type: "line",
-        source: CDMX_METRO_SOURCE_ID,
-        layout: {
-          visibility: "none",
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": "#1a1a1a",
-          "line-width": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            10, 14,
-            14, 18,
-            18, 20,
-          ],
-          "line-blur": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            10, 6,
-            14, 8,
-            18, 10,
-          ],
-          "line-opacity": 0.22,
-        },
-      })
-    }
-    if (!map.getLayer(CDMX_METRO_LINE_LAYER_ID)) {
-      map.addLayer({
-        id: CDMX_METRO_LINE_LAYER_ID,
-        type: "line",
-        source: CDMX_METRO_SOURCE_ID,
-        layout: {
-          visibility: "none",
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": ["coalesce", ["get", "color"], "#666666"],
-          "line-width": 4,
-          "line-opacity": 0.9,
-        },
-      })
-    }
+    // Geodata por grupo: un source + line/point layers por cada group_code visible.
+    visibleGroupCodes.forEach((groupCode) => {
+      const srcId = geodataSourceId(groupCode)
+      if (!map.getSource(srcId)) {
+        map.addSource(srcId, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        })
+      }
+      const visibleIds: string[] = Object.keys(visibleLayerGeodata[groupCode] ?? {}).filter(
+        (id) => visibleLayerGeodata[groupCode][id] === true
+      )
+      const baseLineFilter: mapboxgl.Expression = ["all", ["==", ["get", "type"], "line"], ["==", ["get", "group"], groupCode]]
+      const basePointFilter: mapboxgl.Expression = ["all", ["==", ["get", "type"], "point"], ["==", ["get", "group"], groupCode]]
+      const layerIdFilter: mapboxgl.Expression = ["in", ["get", "layer_geodata_id"], ["literal", visibleIds]]
+      const lineFilter: mapboxgl.Expression =
+        ["all", baseLineFilter, layerIdFilter]
+      const pointFilter: mapboxgl.Expression =
+        ["all", basePointFilter, layerIdFilter]
 
-    // Events + stations source and layers (GPU, no DOM markers)
+      fetch(`/api/layer-geodata?group_code=${encodeURIComponent(groupCode)}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((list: Array<{ id: string; type: string; geojson?: { type?: string; features?: unknown[] } }>) => {
+          const allFeatures: unknown[] = []
+          ;(list ?? []).forEach((item) => {
+            const layerGeodataId = String(item.id)
+            const enrichLine = (f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => ({
+              ...f,
+              properties: {
+                ...f.properties,
+                group: groupCode,
+                layer_geodata_id: layerGeodataId,
+                type: "line" as const,
+                feature_type: f.properties?.feature_type ?? "metro_line",
+              },
+            })
+            const enrichPoint = (f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => ({
+              ...f,
+              properties: {
+                ...f.properties,
+                group: groupCode,
+                layer_geodata_id: layerGeodataId,
+                type: "point" as const,
+                feature_type: f.properties?.feature_type ?? "geodata_point",
+              },
+            })
+            if (item.type === "line") {
+              const feats = item.geojson?.features ?? []
+              allFeatures.push(...feats.map((f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => enrichLine(f)))
+            }
+            if (item.type === "point") {
+              const feats = item.geojson?.features ?? []
+              allFeatures.push(...feats.map((f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => enrichPoint(f)))
+            }
+          })
+          const enriched = { type: "FeatureCollection" as const, features: allFeatures }
+          const src = map.getSource(srcId) as mapboxgl.GeoJSONSource | undefined
+          if (src) src.setData(enriched)
+        })
+        .catch(() => {})
+
+      const visibility = "visible"
+      const glowId = geodataLineGlowLayerId(groupCode)
+      const lineId = geodataLineLayerId(groupCode)
+      const pointsId = geodataPointsLayerId(groupCode)
+      if (!map.getLayer(glowId)) {
+        map.addLayer({
+          id: glowId,
+          type: "line",
+          source: srcId,
+          filter: lineFilter,
+          layout: { visibility, "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#1a1a1a",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 14, 14, 18, 18, 20],
+            "line-blur": ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 18, 10],
+            "line-opacity": 0.22,
+          },
+        })
+      } else {
+        map.setFilter(glowId, lineFilter)
+        map.setLayoutProperty(glowId, "visibility", visibility)
+      }
+      if (!map.getLayer(lineId)) {
+        map.addLayer({
+          id: lineId,
+          type: "line",
+          source: srcId,
+          filter: lineFilter,
+          layout: { visibility, "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": ["coalesce", ["get", "color"], "#666666"],
+            "line-width": 4,
+            "line-opacity": 0.9,
+          },
+        })
+      } else {
+        map.setFilter(lineId, lineFilter)
+        map.setLayoutProperty(lineId, "visibility", visibility)
+      }
+      if (!map.getLayer(pointsId)) {
+        map.addLayer({
+          id: pointsId,
+          type: "circle",
+          source: srcId,
+          filter: pointFilter,
+          minzoom: 9,
+          layout: { visibility },
+          paint: {
+            "circle-radius": 8,
+            "circle-color": "rgba(0,163,224,0.6)",
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "rgba(212,201,168,0.6)",
+          },
+        })
+      } else {
+        map.setFilter(pointsId, pointFilter)
+        map.setLayoutProperty(pointsId, "visibility", visibility)
+      }
+    })
+
+    // Ocultar capas de grupos que ya no están visibles.
+    Object.keys(visibleGroups).forEach((groupCode) => {
+      if (visibleGroups[groupCode]) return
+      const hid = "none"
+      ;[geodataLineGlowLayerId(groupCode), geodataLineLayerId(groupCode), geodataPointsLayerId(groupCode)].forEach((lid) => {
+        if (map.getLayer(lid)) map.setLayoutProperty(lid, "visibility", hid)
+      })
+    })
+
+    // Events + stations: filtro por grupos visibles.
     if (!map.getSource(CDMX_EVENTS_SOURCE_ID)) {
       map.addSource(CDMX_EVENTS_SOURCE_ID, {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       })
     }
+    const eventsStationsVisibility = visibleGroupCodes.length > 0 ? "visible" : "none"
+    const groupFilter: mapboxgl.Expression =
+      visibleGroupCodes.length > 0
+        ? ["in", ["get", "group"], ["literal", visibleGroupCodes]]
+        : ["==", ["get", "group"], ""]
+    const stationFilter: mapboxgl.Expression = [
+      "all",
+      ["==", ["get", "type"], "point"],
+      ["==", ["get", "feature_type"], "station"],
+      groupFilter,
+    ]
+    const eventFilter: mapboxgl.Expression = [
+      "all",
+      ["==", ["get", "type"], "point"],
+      ["==", ["get", "feature_type"], "event"],
+      groupFilter,
+    ]
     if (!map.getLayer(METRO_STATIONS_LAYER_ID)) {
       map.addLayer({
         id: METRO_STATIONS_LAYER_ID,
         type: "circle",
         source: CDMX_EVENTS_SOURCE_ID,
         minzoom: 9,
-        filter: ["==", ["get", "type"], "station"],
+        layout: { visibility: eventsStationsVisibility },
+        filter: stationFilter,
         paint: {
-          "circle-radius": [
-            "case",
-            ["get", "hasStory"],
-            10,
-            8,
-          ],
-          "circle-color": [
-            "case",
-            ["get", "hasStory"],
-            "rgba(0,163,224,0.85)",
-            "rgba(0,163,224,0.5)",
-          ],
+          "circle-radius": ["case", ["get", "hasStory"], 10, 8],
+          "circle-color": ["case", ["get", "hasStory"], "rgba(0,163,224,0.85)", "rgba(0,163,224,0.5)"],
           "circle-stroke-width": 1.5,
           "circle-stroke-color": "rgba(212,201,168,0.6)",
         },
       })
+    } else {
+      map.setLayoutProperty(METRO_STATIONS_LAYER_ID, "visibility", eventsStationsVisibility)
+      map.setFilter(METRO_STATIONS_LAYER_ID, stationFilter)
     }
     if (!map.getLayer(EVENTS_LAYER_ID)) {
       map.addLayer({
@@ -640,32 +742,36 @@ export function MapboxCanvas({
         type: "symbol",
         source: CDMX_EVENTS_SOURCE_ID,
         minzoom: 12,
-        filter: ["==", ["get", "type"], "event"],
+        filter: eventFilter,
         layout: {
           "icon-image": ["get", "symbol"],
-          "icon-size": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12, 0.5,
-            15, 0.7,
-            18, 1,
-          ],
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 15, 0.7, 18, 1],
           "icon-allow-overlap": false,
           "icon-ignore-placement": false,
         },
       })
+    } else {
+      map.setLayoutProperty(EVENTS_LAYER_ID, "visibility", eventsStationsVisibility)
+      map.setFilter(EVENTS_LAYER_ID, eventFilter)
     }
 
-      // Keep aura layers above style layers so the portal edge remains visible.
-      if (map.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)
-      if (map.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
-      if (map.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)
-      if (map.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
-      if (map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) map.moveLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)
-      if (map.getLayer(CDMX_METRO_LINE_LAYER_ID)) map.moveLayer(CDMX_METRO_LINE_LAYER_ID)
-      if (map.getLayer(METRO_STATIONS_LAYER_ID)) map.moveLayer(METRO_STATIONS_LAYER_ID)
-      if (map.getLayer(EVENTS_LAYER_ID)) map.moveLayer(EVENTS_LAYER_ID)
+    // Escenografía: descubrir capas del estilo con id escenografia-*
+    const styleLayers = map.getStyle().layers ?? []
+    const escenografiaIds = styleLayers.filter((l) => l.id.startsWith(ESCENOGRAFIA_PREFIX)).map((l) => ({ id: l.id }))
+    if (escenografiaIds.length > 0) onEscenografiaLayersLoaded?.(escenografiaIds)
+
+    // Keep aura layers above style layers.
+    if (map.getLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_VEIL_LAYER_ID)
+    if (map.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
+    if (map.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)
+    if (map.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) map.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
+    visibleGroupCodes.forEach((groupCode) => {
+      ;[geodataLineGlowLayerId(groupCode), geodataLineLayerId(groupCode), geodataPointsLayerId(groupCode)].forEach((lid) => {
+        if (map.getLayer(lid)) map.moveLayer(lid)
+      })
+    })
+    if (map.getLayer(EVENTS_LAYER_ID)) map.moveLayer(EVENTS_LAYER_ID)
+    if (map.getLayer(METRO_STATIONS_LAYER_ID)) map.moveLayer(METRO_STATIONS_LAYER_ID)
 
       applyPrecipitation()
     }
@@ -689,19 +795,18 @@ export function MapboxCanvas({
       map.once("idle", onIdle)
     }
     return () => map.off("idle", onIdle)
-  }, [isReady, mapStyle, projection, mapboxRain.enabled, mapboxRain.color, mapboxSnow.enabled, mapboxSnow.color])
+  }, [isReady, visibleGroups, visibleLayerGeodata, mapStyle, projection, boundaryGlow.enabled, mapboxRain.enabled, mapboxRain.color, mapboxSnow.enabled, mapboxSnow.color, onEscenografiaLayersLoaded])
 
+  // Aplicar visibilidad de capas escenografía (estilo Mapbox).
   useEffect(() => {
     if (!mapRef.current || !isReady) return
     const map = mapRef.current
-    const visibility = showMetro ? "visible" : "none"
-    if (map.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) {
-      map.setLayoutProperty(CDMX_METRO_LINE_GLOW_LAYER_ID, "visibility", visibility)
-    }
-    if (map.getLayer(CDMX_METRO_LINE_LAYER_ID)) {
-      map.setLayoutProperty(CDMX_METRO_LINE_LAYER_ID, "visibility", visibility)
-    }
-  }, [isReady, showMetro])
+    Object.entries(escenografiaVisible).forEach(([layerId, visible]) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none")
+      }
+    })
+  }, [isReady, escenografiaVisible])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -748,11 +853,12 @@ export function MapboxCanvas({
       events,
       metroStations,
       showEventsAndStations,
-      showMetro,
-      metroStories
+      showEventsAndStations,
+      metroStories,
+      visibleGroupCodes
     )
     source.setData(geoJSON)
-  }, [events, metroStations, showEventsAndStations, showMetro, metroStories, isReady])
+  }, [events, metroStations, showEventsAndStations, metroStories, visibleGroupCodes, isReady])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -821,9 +927,9 @@ export function MapboxCanvas({
     if (!mapRef.current || !isReady) return
     const map = mapRef.current
     if (!map.getLayer(METRO_STATIONS_LAYER_ID)) return
-    const visibility = showMetro ? "visible" : "none"
+    const visibility = visibleGroupCodes.length > 0 ? "visible" : "none"
     map.setLayoutProperty(METRO_STATIONS_LAYER_ID, "visibility", visibility)
-  }, [isReady, showMetro])
+  }, [isReady, visibleGroupCodes.length])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -899,11 +1005,12 @@ export function MapboxCanvas({
 
     return () => {
       devLog("[map] landmarks effect cleanup", { count: mapRef_.size })
-      mapRef_.forEach(({ marker, root }) => {
-        marker.remove()
-        root.unmount()
-      })
+      const entries = Array.from(mapRef_.entries())
       mapRef_.clear()
+      entries.forEach(([, { marker, root }]) => {
+        marker.remove()
+        queueMicrotask(() => root.unmount())
+      })
     }
   }, [isReady, landmarksList])
 
@@ -1081,11 +1188,14 @@ export function MapboxCanvas({
     if (mapRef.current.getLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_GLOW_LAYER_ID)
     if (mapRef.current.getLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_PORTAL_GLOW_LAYER_ID)
     if (mapRef.current.getLayer(CDMX_BOUNDARY_LINE_LAYER_ID)) mapRef.current.moveLayer(CDMX_BOUNDARY_LINE_LAYER_ID)
-    if (mapRef.current.getLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)) mapRef.current.moveLayer(CDMX_METRO_LINE_GLOW_LAYER_ID)
-    if (mapRef.current.getLayer(CDMX_METRO_LINE_LAYER_ID)) mapRef.current.moveLayer(CDMX_METRO_LINE_LAYER_ID)
-    if (mapRef.current.getLayer(METRO_STATIONS_LAYER_ID)) mapRef.current.moveLayer(METRO_STATIONS_LAYER_ID)
+    visibleGroupCodes.forEach((groupCode) => {
+      ;[geodataLineGlowLayerId(groupCode), geodataLineLayerId(groupCode), geodataPointsLayerId(groupCode)].forEach((lid) => {
+        if (mapRef.current?.getLayer(lid)) mapRef.current.moveLayer(lid)
+      })
+    })
     if (mapRef.current.getLayer(EVENTS_LAYER_ID)) mapRef.current.moveLayer(EVENTS_LAYER_ID)
-  }, [showDensityEffective, events, isReady])
+    if (mapRef.current.getLayer(METRO_STATIONS_LAYER_ID)) mapRef.current.moveLayer(METRO_STATIONS_LAYER_ID)
+  }, [showDensityEffective, events, isReady, visibleGroups])
 
   const cfg = mapConfig
   const f = cfg?.filter ?? { sepia: 0, hueRotate: 0, saturate: 100, contrast: 100, brightness: 100 }

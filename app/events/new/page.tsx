@@ -1,9 +1,12 @@
 "use client"
 
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { EventForm } from "@/components/event-form"
 
 export default function NewEventPage() {
+  const searchParams = useSearchParams()
+  const defaultContainerId = searchParams.get("container") ?? undefined
   return (
     <main className="min-h-screen" style={{ background: "var(--background)" }}>
       <div className="max-w-md mx-auto px-6 py-12">
@@ -30,7 +33,7 @@ export default function NewEventPage() {
           className="border border-[var(--panel-border)] rounded-lg p-6"
           style={{ background: "var(--panel-bg)" }}
         >
-          <EventForm />
+          <EventForm defaultContainerId={defaultContainerId} />
         </div>
       </div>
     </main>

@@ -11,7 +11,10 @@
     "landmarks:build": "node scripts/build-landmark-placeholders.mjs",
     "metro:convert": "node scripts/kmz-to-geojson.mjs",
     "db:push": "dotenv -e .env.local -- supabase db push",
-    "db:link": "dotenv -e .env.local -- sh -c 'supabase link --project-ref \"$SUPABASE_PROJECT_ID\"'"
+    "db:link": "dotenv -e .env.local -- sh -c 'supabase link --project-ref \"$SUPABASE_PROJECT_ID\"'",
+    "scripts:backup-events": "dotenv -e .env.local -- node scripts/backup-events.mjs",
+    "scripts:debug-data": "dotenv -e .env.local -- node scripts/debug-data.mjs",
+    "scripts:clean-layer-catalog": "dotenv -e .env.local -- node scripts/clean-layer-catalog.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

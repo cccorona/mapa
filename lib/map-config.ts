@@ -35,6 +35,14 @@ export interface BoundaryGlowConfig {
   lineWidth: number
 }
 
+export interface ParticlesOverlayConfig {
+  enabled: boolean
+  count: number
+  size: number
+  opacity: number
+  speed: number
+}
+
 export interface MapConfig {
   style: string
   projection: ProjectionMode
@@ -81,6 +89,8 @@ export interface MapConfig {
     enabled: boolean
     color: string
   }
+  /** Three.js floating particles overlay */
+  particlesOverlay: ParticlesOverlayConfig
 }
 
 export const DEFAULT_MAP_CONFIG: MapConfig = {
@@ -94,12 +104,12 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
     show3dObjects: true,
   },
   popupConfig: {
-    titleSize: 22,
-    bodySize: 17,
-    metaSize: 11,
-    backdropOpacity: 40,
+    titleSize: 26,
+    bodySize: 21,
+    metaSize: 14,
+    backdropOpacity: 50,
     veilOpacity: 100,
-    panelGlow: 70,
+    panelGlow: 82,
     blurIn: 2,
     animDuration: 760,
   },
@@ -140,6 +150,13 @@ export const DEFAULT_MAP_CONFIG: MapConfig = {
   mapboxSnow: {
     enabled: false,
     color: "#ffffff",
+  },
+  particlesOverlay: {
+    enabled: false,
+    count: 800,
+    size: 1.5,
+    opacity: 0.4,
+    speed: 0.3,
   },
 }
 
@@ -189,6 +206,7 @@ export function exportMapConfig(config: Partial<MapConfig>): string {
     soulOrb: { ...DEFAULT_MAP_CONFIG.soulOrb, ...config.soulOrb },
     mapboxRain: { ...DEFAULT_MAP_CONFIG.mapboxRain, ...config.mapboxRain },
     mapboxSnow: { ...DEFAULT_MAP_CONFIG.mapboxSnow, ...config.mapboxSnow },
+    particlesOverlay: { ...DEFAULT_MAP_CONFIG.particlesOverlay, ...config.particlesOverlay },
   }
   return JSON.stringify(full, null, 2)
 }
