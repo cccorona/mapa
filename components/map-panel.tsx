@@ -391,8 +391,7 @@ const MapPanelInner = ({
           </div>
 
           {/* Capas: toggles desde BD (layer_groups) */}
-          {!isPrd && (
-            <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+          <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
                 onClick={() => setExpandedSection(expandedSection === "capas" ? null : "capas")}
@@ -477,11 +476,9 @@ const MapPanelInner = ({
                 </div>
               )}
             </div>
-          )}
 
           {/* Escenografía: capas del estilo Mapbox con id escenografia-* */}
-          {!isPrd && (
-            <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+          <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
                 onClick={() => setExpandedSection(expandedSection === "escenografia" ? null : "escenografia")}
@@ -537,7 +534,6 @@ const MapPanelInner = ({
                 </div>
               )}
             </div>
-          )}
 
           {/* Prueba mapa - oculto por diseño; capas dinámicas desde catálogo */}
           {false && showMapTestPanel && mapConfig && onMapConfigChange && (
