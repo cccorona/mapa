@@ -1,10 +1,11 @@
 "use client"
 
+import { Suspense } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { EventForm } from "@/components/event-form"
 
-export default function NewEventPage() {
+function NewEventContent() {
   const searchParams = useSearchParams()
   const defaultContainerId = searchParams.get("container") ?? undefined
   return (
@@ -37,5 +38,21 @@ export default function NewEventPage() {
         </div>
       </div>
     </main>
+  )
+}
+
+export default function NewEventPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen" style={{ background: "var(--background)" }}>
+          <div className="max-w-md mx-auto px-6 py-12 font-mono text-[12px] text-[var(--parchment-dim)]">
+            Cargando…
+          </div>
+        </main>
+      }
+    >
+      <NewEventContent />
+    </Suspense>
   )
 }
