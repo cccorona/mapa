@@ -2,6 +2,11 @@ import { NextResponse } from "next/server"
 import { createAdminClient } from "@/lib/supabase/admin-server"
 import { requireSession } from "@/lib/auth/require-session"
 
+/** Misma posición práctica (5 decimales) para no duplicar filas en location_containers. */
+function roundCoord5(n: number): number {
+  return Math.round(n * 1e5) / 1e5
+}
+
 export async function GET(request: Request) {
   const auth = await requireSession(request)
   if (auth instanceof NextResponse) return auth
@@ -29,6 +34,15 @@ export async function POST(request: Request) {
   }
   try {
     const supabase = createAdminClient()
+    const { data: existingRows, error: listError } = await supabase.rpc("get_location_containers_all")
+    if (listError) return NextResponse.json({ error: listError.message }, { status: 500 })
+    const rows = (existingRows ?? []) as Array<{ id: string; lat: number; lng: number }>
+    const duplicate = rows.find(
+      (r) => roundCoord5(r.lat) === roundCoord5(lat) && roundCoord5(r.lng) === roundCoord5(lng)
+    )
+    if (duplicate) {
+      return NextResponse.json({ id: duplicate.id })
+    }
     const { data, error } = await supabase.rpc("create_location_container", {
       p_lat: lat,
       p_lng: lng,

@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client"
 import { useEffect, useRef, useState } from "react"
 import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
+import { MapboxOverlay } from "@deck.gl/mapbox"
+import { ScatterplotLayer } from "@deck.gl/layers"
 import type { ObservationEvent } from "@/lib/data"
 import type { MetroStation, MetroStory } from "@/types/metro"
 import { getSymbolForType, SYMBOLS } from "@/lib/icons"
@@ -45,6 +47,9 @@ function geodataLineLayerId(groupCode: string): string {
 function geodataPointsLayerId(groupCode: string): string {
   return `geodata-${groupCode}-points`
 }
+function geodataFillLayerId(groupCode: string): string {
+  return `geodata-${groupCode}-fill`
+}
 type LandmarkFromApi = {
   id: string
   name: string
@@ -54,8 +59,154 @@ type LandmarkFromApi = {
   icon_svg_url?: string | null
 }
 
+const FLOW_TIME_MAX = 1.2
+const FLOW_TIME_MAX_LOOP = 3
+const FLOW_DEVIATION_SCALE = 0.00015
+const FLOW_JITTER_SCALE = 0.00002
+const FLOW_REPEATS_CONSTANT = 3
+
+/** Repite path en tiempo para flujo constante (sin desaparición al final). Devuelve path 3x y timestamps 0..1, 1..2, 2..3 + phase. */
+function extendPathForConstantFlow(path: [number, number][], phase: number): { path: [number, number][]; timestamps: number[] } {
+  if (path.length < 2) return { path, timestamps: path.map((_, i) => (i / (path.length - 1)) + phase) }
+  const n = path.length
+  const extendedPath: [number, number][] = [...path]
+  const extendedTimestamps: number[] = path.map((_, i) => i / (n - 1) + phase)
+  for (let r = 1; r < FLOW_REPEATS_CONSTANT; r++) {
+    for (let i = 1; i < n; i++) {
+      extendedPath.push(path[i])
+      extendedTimestamps.push(r + i / (n - 1) + phase)
+    }
+  }
+  return { path: extendedPath, timestamps: extendedTimestamps }
+}
+
+type FlowRawDatum = { path: [number, number][]; color: [number, number, number]; lineWidth?: number }
+type FlowParticleDatum = { position: [number, number]; color: [number, number, number]; radius: number }
+
+/** Partícula persistente: path propio, fase, tamaño y velocidad (más grande = más lenta). */
+type FlowParticleDef = {
+  offsetPath: [number, number][]
+  timestamps: number[]
+  phase: number
+  radius: number
+  speedFactor: number
+  color: [number, number, number]
+}
+
+/** Timestamps 0..1 por longitud de arco y curvatura: en curvas se avanza más lento (más rango de t por segmento). */
+function pathToTimestamps(path: [number, number][], curvatureWeight = 0.4): number[] {
+  if (path.length < 2) return path.map((_, i) => i)
+  const n = path.length
+  const costs: number[] = []
+  for (let i = 0; i < n - 1; i++) {
+    const a = path[i]
+    const b = path[i + 1]
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1e-6
+    let curvature = 0
+    if (i > 0 && i + 2 < n) {
+      const p0 = path[i - 1]
+      const p1 = path[i]
+      const p2 = path[i + 1]
+      const p3 = path[i + 2]
+      const d1x = p1[0] - p0[0], d1y = p1[1] - p0[1]
+      const d2x = p2[0] - p1[0], d2y = p2[1] - p1[1]
+      const d3x = p3[0] - p2[0], d3y = p3[1] - p2[1]
+      const l1 = Math.hypot(d1x, d1y) || 1
+      const l2 = Math.hypot(d2x, d2y) || 1
+      const l3 = Math.hypot(d3x, d3y) || 1
+      const ang1 = Math.atan2(d2y / l2 - d1y / l1, d2x / l2 - d1x / l1)
+      const ang2 = Math.atan2(d3y / l3 - d2y / l2, d3x / l3 - d2x / l2)
+      curvature = Math.abs(ang1) + Math.abs(ang2)
+    }
+    costs.push(len * (1 + curvatureWeight * curvature))
+  }
+  const total = costs.reduce((s, c) => s + c, 0) || 1
+  const out: number[] = [0]
+  let acc = 0
+  for (let i = 0; i < costs.length; i++) {
+    acc += costs[i]
+    out.push(acc / total)
+  }
+  return out
+}
+
+/** Interpola posición a lo largo del path según tiempo t (mismas unidades que timestamps). */
+function interpolatePathPosition(path: [number, number][], timestamps: number[], t: number): [number, number] | null {
+  if (path.length < 2 || timestamps.length !== path.length) return null
+  const n = path.length - 1
+  if (t <= timestamps[0]) return path[0]
+  if (t >= timestamps[n]) return path[n]
+  for (let i = 0; i < n; i++) {
+    if (t >= timestamps[i] && t <= timestamps[i + 1]) {
+      const d = timestamps[i + 1] - timestamps[i]
+      const f = d > 0 ? (t - timestamps[i]) / d : 0
+      return [path[i][0] + (path[i + 1][0] - path[i][0]) * f, path[i][1] + (path[i + 1][1] - path[i][1]) * f]
+    }
+  }
+  return null
+}
+
+/** Valor determinista en [-1, 1] sin sin/cos para evitar ondas visibles. */
+function flowHashUnit(particleIndex: number, vertexIndex: number): number {
+  let h = (particleIndex * 7919 + vertexIndex * 7877) >>> 0
+  h = (h ^ (h >>> 16)) * 0x85ebca6b
+  h = (h ^ (h >>> 13)) * 0xc2b2ae35
+  return ((h >>> 0) / 0xffffffff) * 2 - 1
+}
+
+/** bandWidthScale: escala del ancho de banda (p. ej. lineWidth/4). Partículas se distribuyen en una banda perpendicular al path. */
+function offsetPath(path: [number, number][], deviation: number, particleIndex: number, bandWidthScale = 1): [number, number][] {
+  if (path.length < 2 || (deviation <= 0 && bandWidthScale <= 0)) return path
+  const scale = Math.max(0, bandWidthScale) * FLOW_DEVIATION_SCALE * (deviation || 1)
+  if (scale <= 0) return path
+  const out: [number, number][] = []
+  for (let i = 0; i < path.length; i++) {
+    const [lng, lat] = path[i]
+    let dx = 0, dy = 0
+    if (i < path.length - 1) {
+      const next = path[i + 1]
+      dx = next[0] - lng
+      dy = next[1] - lat
+    } else if (i > 0) {
+      const prev = path[i - 1]
+      dx = lng - prev[0]
+      dy = lat - prev[1]
+    }
+    const len = Math.hypot(dx, dy) || 1
+    const u = flowHashUnit(particleIndex, i)
+    const perpLng = (-dy / len) * scale * u
+    const perpLat = (dx / len) * scale * u
+    out.push([lng + perpLng, lat + perpLat])
+  }
+  return out
+}
+
+/** Convierte hex/rgb a [R,G,B]. Lanza si el color es inválido (sin fallbacks). */
+function hexToRgb(hex: string): [number, number, number] {
+  if (hex == null || typeof hex !== "string" || !hex.trim()) {
+    throw new Error(`Color inválido: se requiere string no vacío`)
+  }
+  const s = hex.trim()
+  const m6 = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(s)
+  if (m6) return [parseInt(m6[1], 16), parseInt(m6[2], 16), parseInt(m6[3], 16)]
+  const m3 = /^#?([a-f\d])([a-f\d])([a-f\d])$/i.exec(s)
+  if (m3) return [parseInt(m3[1] + m3[1], 16), parseInt(m3[2] + m3[2], 16), parseInt(m3[3] + m3[3], 16)]
+  const rgb = /^rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(s)
+  if (rgb) return [parseInt(rgb[1], 10), parseInt(rgb[2], 10), parseInt(rgb[3], 10)]
+  throw new Error(`Color inválido: "${hex}" (use #RRGGBB, #RGB o rgb(r,g,b))`)
+}
+
 function roundCoord(c: number): number {
   return Math.round(c * 100000) / 100000
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
 }
 
 type PointFeature = {
@@ -163,6 +314,8 @@ interface MapboxCanvasProps {
   bearing?: number
   mapConfig?: MapConfig
   zoom?: number
+  /** Solo admin: mostrar panel de parámetros de flujo (FPS, partículas, etc.). En mapa público no se muestra. */
+  showFlowParamsPanel?: boolean
 }
 
 export function MapboxCanvas({
@@ -188,6 +341,7 @@ export function MapboxCanvas({
   bearing = 0,
   mapConfig,
   zoom = CDMX_DEFAULT_ZOOM,
+  showFlowParamsPanel = false,
 }: MapboxCanvasProps) {
   devLog("[landmarks] MapboxCanvas render, token:", !!mapboxgl.accessToken)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -202,11 +356,72 @@ export function MapboxCanvas({
   const lastCenteredEventRef = useRef<string | null>(null)
   const lastMaterializedEventRef = useRef<string | null>(null)
   const [isReady, setIsReady] = useState(false)
+  const [hasFlowLayers, setHasFlowLayers] = useState(false)
+  const [flowTime, setFlowTime] = useState(0)
+  const flowTimeRef = useRef(0)
+  flowTimeRef.current = flowTime
   const [landmarksList, setLandmarksList] = useState<LandmarkFromApi[]>([])
   const setLandmarksListRef = useRef(setLandmarksList)
   setLandmarksListRef.current = setLandmarksList
   const landmarksMarkersMapRef = useRef<Map<string, { marker: mapboxgl.Marker; root: ReturnType<typeof createRoot>; div: HTMLDivElement }>>(new Map())
 
+  const geodataPopupRef = useRef<mapboxgl.Popup | null>(null)
+  const flowRawRef = useRef<FlowRawDatum[]>([])
+  const particleSystemsRef = useRef<{
+    config: { rawLen: number; dataSig: string; N: number; deviation: number; wMin: number; wMax: number }
+    systems: FlowParticleDef[][]
+  } | null>(null)
+  const deckOverlayRef = useRef<InstanceType<typeof MapboxOverlay> | null>(null)
+  const [flowParticleCount, setFlowParticleCount] = useState(500)
+  const [flowPathDeviation, setFlowPathDeviation] = useState(0.3)
+  const [flowTrailLength, setFlowTrailLength] = useState(0.02)
+  const [flowAnimating, setFlowAnimating] = useState(true)
+  const [flowConstantFlow, setFlowConstantFlow] = useState(true)
+  const [flowWidthMinPixels, setFlowWidthMinPixels] = useState(1.5)
+  const [flowWidthMaxPixels, setFlowWidthMaxPixels] = useState(4)
+  const [flowWidthScale, setFlowWidthScale] = useState(1)
+  const [flowFadeTrail, setFlowFadeTrail] = useState(true)
+  const [flowCapRounded, setFlowCapRounded] = useState(true)
+  const [flowJointRounded, setFlowJointRounded] = useState(true)
+  const [flowBillboard, setFlowBillboard] = useState(false)
+  const [flowMiterLimit, setFlowMiterLimit] = useState(4)
+  const [flowFps, setFlowFps] = useState<number | null>(null)
+  const [flowJitter, setFlowJitter] = useState(0.5)
+  const [flowWindStyleWhite, setFlowWindStyleWhite] = useState(false)
+  const flowWindStyleWhiteRef = useRef(flowWindStyleWhite)
+  flowWindStyleWhiteRef.current = flowWindStyleWhite
+  const flowFpsSetRef = useRef(setFlowFps)
+  flowFpsSetRef.current = setFlowFps
+  const flowFpsFrameCountRef = useRef(0)
+  const flowFpsLastTimeRef = useRef(performance.now())
+  const flowJitterRef = useRef(flowJitter)
+  flowJitterRef.current = flowJitter
+  const flowParticleCountRef = useRef(flowParticleCount)
+  const flowPathDeviationRef = useRef(flowPathDeviation)
+  const flowTrailLengthRef = useRef(flowTrailLength)
+  const flowAnimatingRef = useRef(flowAnimating)
+  const flowConstantFlowRef = useRef(flowConstantFlow)
+  const flowWidthMinPixelsRef = useRef(flowWidthMinPixels)
+  const flowWidthMaxPixelsRef = useRef(flowWidthMaxPixels)
+  const flowWidthScaleRef = useRef(flowWidthScale)
+  const flowFadeTrailRef = useRef(flowFadeTrail)
+  const flowCapRoundedRef = useRef(flowCapRounded)
+  const flowJointRoundedRef = useRef(flowJointRounded)
+  const flowBillboardRef = useRef(flowBillboard)
+  const flowMiterLimitRef = useRef(flowMiterLimit)
+  flowParticleCountRef.current = flowParticleCount
+  flowPathDeviationRef.current = flowPathDeviation
+  flowTrailLengthRef.current = flowTrailLength
+  flowAnimatingRef.current = flowAnimating
+  flowConstantFlowRef.current = flowConstantFlow
+  flowWidthMinPixelsRef.current = flowWidthMinPixels
+  flowWidthMaxPixelsRef.current = flowWidthMaxPixels
+  flowWidthScaleRef.current = flowWidthScale
+  flowFadeTrailRef.current = flowFadeTrail
+  flowCapRoundedRef.current = flowCapRounded
+  flowJointRoundedRef.current = flowJointRounded
+  flowBillboardRef.current = flowBillboard
+  flowMiterLimitRef.current = flowMiterLimit
   const onSelectEventRef = useRef(onSelectEvent)
   const onSelectMetroStoryRef = useRef(onSelectMetroStory)
   const onSelectStationRef = useRef(onSelectStation)
@@ -564,6 +779,8 @@ export function MapboxCanvas({
     }
 
     // Geodata por grupo: un source + line/point layers por cada group_code visible.
+    flowRawRef.current = []
+    setHasFlowLayers(false)
     visibleGroupCodes.forEach((groupCode) => {
       const srcId = geodataSourceId(groupCode)
       if (!map.getSource(srcId)) {
@@ -575,19 +792,28 @@ export function MapboxCanvas({
       const visibleIds: string[] = Object.keys(visibleLayerGeodata[groupCode] ?? {}).filter(
         (id) => visibleLayerGeodata[groupCode][id] === true
       )
-      const baseLineFilter: mapboxgl.Expression = ["all", ["==", ["get", "type"], "line"], ["==", ["get", "group"], groupCode]]
+      const baseLineFilter: mapboxgl.Expression = ["all", ["in", ["get", "type"], ["literal", ["line", "polygon"]]], ["==", ["get", "group"], groupCode]]
       const basePointFilter: mapboxgl.Expression = ["all", ["==", ["get", "type"], "point"], ["==", ["get", "group"], groupCode]]
+      const basePolygonFilter: mapboxgl.Expression = ["all", ["==", ["get", "type"], "polygon"], ["==", ["get", "group"], groupCode]]
       const layerIdFilter: mapboxgl.Expression = ["in", ["get", "layer_geodata_id"], ["literal", visibleIds]]
+      const noFlowFilter: mapboxgl.Expression = ["!=", ["get", "effect"], "flow"]
       const lineFilter: mapboxgl.Expression =
-        ["all", baseLineFilter, layerIdFilter]
+        ["all", baseLineFilter, layerIdFilter, noFlowFilter]
       const pointFilter: mapboxgl.Expression =
         ["all", basePointFilter, layerIdFilter]
+      const polygonFilter: mapboxgl.Expression =
+        ["all", basePolygonFilter, layerIdFilter]
 
       fetch(`/api/layer-geodata?group_code=${encodeURIComponent(groupCode)}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((list: Array<{ id: string; type: string; geojson?: { type?: string; features?: unknown[] } }>) => {
+          const listItems = list ?? []
+          // Incluir capas nuevas (recién guardadas): si el id no está en el estado, se consideran visibles.
+          const effectiveVisibleIds: string[] = listItems
+            .map((item) => String(item.id))
+            .filter((id) => visibleLayerGeodata[groupCode]?.[id] !== false)
           const allFeatures: unknown[] = []
-          ;(list ?? []).forEach((item) => {
+          listItems.forEach((item) => {
             const layerGeodataId = String(item.id)
             const enrichLine = (f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => ({
               ...f,
@@ -609,6 +835,16 @@ export function MapboxCanvas({
                 feature_type: f.properties?.feature_type ?? "geodata_point",
               },
             })
+            const enrichPolygon = (f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => ({
+              ...f,
+              properties: {
+                ...f.properties,
+                group: groupCode,
+                layer_geodata_id: layerGeodataId,
+                type: "polygon" as const,
+                feature_type: f.properties?.feature_type ?? "geodata_polygon",
+              },
+            })
             if (item.type === "line") {
               const feats = item.geojson?.features ?? []
               allFeatures.push(...feats.map((f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => enrichLine(f)))
@@ -617,10 +853,47 @@ export function MapboxCanvas({
               const feats = item.geojson?.features ?? []
               allFeatures.push(...feats.map((f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => enrichPoint(f)))
             }
+            if (item.type === "polygon") {
+              const feats = item.geojson?.features ?? []
+              allFeatures.push(...feats.map((f: { type?: string; geometry?: unknown; properties?: Record<string, unknown> }) => enrichPolygon(f)))
+            }
           })
           const enriched = { type: "FeatureCollection" as const, features: allFeatures }
           const src = map.getSource(srcId) as mapboxgl.GeoJSONSource | undefined
           if (src) src.setData(enriched)
+          // Actualizar filtros con la lista real (para que capas nuevas se vean)
+          const effectiveLayerIdFilter: mapboxgl.Expression = ["in", ["get", "layer_geodata_id"], ["literal", effectiveVisibleIds]]
+          const effectiveLineFilter: mapboxgl.Expression = ["all", baseLineFilter, effectiveLayerIdFilter, noFlowFilter]
+          const effectivePointFilter: mapboxgl.Expression = ["all", basePointFilter, effectiveLayerIdFilter]
+          const effectivePolygonFilter: mapboxgl.Expression = ["all", basePolygonFilter, effectiveLayerIdFilter]
+          if (map.getLayer(geodataLineGlowLayerId(groupCode))) map.setFilter(geodataLineGlowLayerId(groupCode), effectiveLineFilter)
+          if (map.getLayer(geodataLineLayerId(groupCode))) map.setFilter(geodataLineLayerId(groupCode), effectiveLineFilter)
+          if (map.getLayer(geodataPointsLayerId(groupCode))) map.setFilter(geodataPointsLayerId(groupCode), effectivePointFilter)
+          if (map.getLayer(geodataFillLayerId(groupCode))) map.setFilter(geodataFillLayerId(groupCode), effectivePolygonFilter)
+          // Extraer flow solo de features visibles (respeta checkbox del panel).
+          const flow: FlowRawDatum[] = []
+          allFeatures.forEach((f: { geometry?: { type?: string; coordinates?: number[][] | number[][][] }; properties?: { effect?: string; color?: string; stroke?: string; lineWidth?: number; layer_geodata_id?: string } }) => {
+            const layerId = String(f?.properties?.layer_geodata_id ?? "")
+            if (!effectiveVisibleIds.includes(layerId)) return
+            const geom = f?.geometry
+            if (geom?.type !== "LineString" && geom?.type !== "Polygon") return
+            if (String(f?.properties?.effect ?? "").toLowerCase().trim() !== "flow") return
+            if (!geom?.coordinates) return
+            const path: [number, number][] =
+              geom.type === "LineString"
+                ? (geom.coordinates as [number, number][])
+                : geom.type === "Polygon"
+                  ? (geom.coordinates[0] as [number, number][])
+                  : []
+            if (path.length < 2) return
+            const colorVal = (f.properties?.color ?? f.properties?.stroke) as string | undefined
+            if (typeof colorVal !== "string" || !colorVal.trim()) return
+            const color = hexToRgb(colorVal)
+            const lineWidth = typeof f.properties?.lineWidth === "number" ? f.properties.lineWidth : 4
+            flow.push({ path, color, lineWidth })
+          })
+          flowRawRef.current = [...flowRawRef.current, ...flow]
+          setHasFlowLayers(flowRawRef.current.length > 0)
         })
         .catch(() => {})
 
@@ -634,17 +907,39 @@ export function MapboxCanvas({
           type: "line",
           source: srcId,
           filter: lineFilter,
+          minzoom: CDMX_DEFAULT_ZOOM,
           layout: { visibility, "line-join": "round", "line-cap": "round" },
           paint: {
             "line-color": "#1a1a1a",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 10, 14, 14, 18, 18, 20],
-            "line-blur": ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 18, 10],
-            "line-opacity": 0.22,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 7, 6, 9, 10, 14, 18, 18, 20],
+            "line-blur": ["case", ["==", ["get", "effect"], "glow"], 12, 8],
+            "line-opacity": ["case", ["==", ["get", "effect"], "glow"], 0.42, 0.22],
           },
         })
       } else {
         map.setFilter(glowId, lineFilter)
         map.setLayoutProperty(glowId, "visibility", visibility)
+      }
+      const fillId = geodataFillLayerId(groupCode)
+      if (!map.getLayer(fillId)) {
+        map.addLayer(
+          {
+            id: fillId,
+            type: "fill",
+            source: srcId,
+            filter: polygonFilter,
+            minzoom: CDMX_DEFAULT_ZOOM,
+            paint: {
+              "fill-color": ["to-color", ["coalesce", ["get", "fillColor"], ["get", "color"], "#666666"]],
+              "fill-opacity": ["coalesce", ["get", "fillOpacity"], 0.25],
+              "fill-outline-color": ["to-color", ["coalesce", ["get", "color"], "#666666"]],
+            },
+          },
+          lineId
+        )
+      } else {
+        map.setFilter(fillId, polygonFilter)
+        map.setLayoutProperty(fillId, "visibility", visibility)
       }
       if (!map.getLayer(lineId)) {
         map.addLayer({
@@ -652,11 +947,13 @@ export function MapboxCanvas({
           type: "line",
           source: srcId,
           filter: lineFilter,
+          minzoom: CDMX_DEFAULT_ZOOM,
           layout: { visibility, "line-join": "round", "line-cap": "round" },
           paint: {
-            "line-color": ["coalesce", ["get", "color"], "#666666"],
-            "line-width": 4,
+            "line-color": ["to-color", ["coalesce", ["get", "color"], "#666666"]],
+            "line-width": ["coalesce", ["get", "lineWidth"], 4],
             "line-opacity": 0.9,
+            "line-dasharray": ["case", ["==", ["get", "effect"], "dashed"], ["literal", [4, 2]], ["literal", [1, 0]]],
           },
         })
       } else {
@@ -669,13 +966,13 @@ export function MapboxCanvas({
           type: "circle",
           source: srcId,
           filter: pointFilter,
-          minzoom: 9,
+          minzoom: CDMX_DEFAULT_ZOOM,
           layout: { visibility },
           paint: {
             "circle-radius": 8,
-            "circle-color": "rgba(0,163,224,0.6)",
+            "circle-color": ["to-color", ["coalesce", ["get", "color"], "#00a3e0"]],
             "circle-stroke-width": 1.5,
-            "circle-stroke-color": "rgba(212,201,168,0.6)",
+            "circle-stroke-color": ["to-color", ["coalesce", ["get", "color"], "#d4c9a8"]],
           },
         })
       } else {
@@ -688,7 +985,7 @@ export function MapboxCanvas({
     Object.keys(visibleGroups).forEach((groupCode) => {
       if (visibleGroups[groupCode]) return
       const hid = "none"
-      ;[geodataLineGlowLayerId(groupCode), geodataLineLayerId(groupCode), geodataPointsLayerId(groupCode)].forEach((lid) => {
+      ;[geodataLineGlowLayerId(groupCode), geodataLineLayerId(groupCode), geodataFillLayerId(groupCode), geodataPointsLayerId(groupCode)].forEach((lid) => {
         if (map.getLayer(lid)) map.setLayoutProperty(lid, "visibility", hid)
       })
     })
@@ -722,7 +1019,7 @@ export function MapboxCanvas({
         id: METRO_STATIONS_LAYER_ID,
         type: "circle",
         source: CDMX_EVENTS_SOURCE_ID,
-        minzoom: 9,
+        minzoom: CDMX_DEFAULT_ZOOM,
         layout: { visibility: eventsStationsVisibility },
         filter: stationFilter,
         paint: {
@@ -741,11 +1038,11 @@ export function MapboxCanvas({
         id: EVENTS_LAYER_ID,
         type: "symbol",
         source: CDMX_EVENTS_SOURCE_ID,
-        minzoom: 12,
+        minzoom: CDMX_DEFAULT_ZOOM,
         filter: eventFilter,
         layout: {
           "icon-image": ["get", "symbol"],
-          "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 15, 0.7, 18, 1],
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 7, 0.4, 12, 0.5, 15, 0.7, 18, 1],
           "icon-allow-overlap": false,
           "icon-ignore-placement": false,
         },
@@ -796,6 +1093,157 @@ export function MapboxCanvas({
     }
     return () => map.off("idle", onIdle)
   }, [isReady, visibleGroups, visibleLayerGeodata, mapStyle, projection, boundaryGlow.enabled, mapboxRain.enabled, mapboxRain.color, mapboxSnow.enabled, mapboxSnow.color, onEscenografiaLayersLoaded])
+
+  // MapboxOverlay para efecto flujo (TripsLayer).
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    if (!deckOverlayRef.current) {
+      const overlay = new MapboxOverlay({ interleaved: false, layers: [] })
+      map.addControl(overlay)
+      deckOverlayRef.current = overlay
+    }
+    return () => {
+      const overlay = deckOverlayRef.current
+      if (overlay && mapRef.current) {
+        mapRef.current.removeControl(overlay)
+        if ("finalize" in overlay && typeof overlay.finalize === "function") overlay.finalize()
+        deckOverlayRef.current = null
+      }
+    }
+  }, [isReady])
+
+  // Animación partículas (ScatterplotLayer): simulación por partícula con path propio, fase, tamaño y velocidad.
+  useEffect(() => {
+    if (!mapRef.current || !isReady || !deckOverlayRef.current) return
+    const map = mapRef.current
+    const overlay = deckOverlayRef.current
+    let rafId = 0
+    particleSystemsRef.current = null
+
+    function ensureFlowParticlesInitialized() {
+      const raw = flowRawRef.current
+      const N = Math.max(1, Math.min(2000, flowParticleCountRef.current))
+      const deviation = flowPathDeviationRef.current
+      const wMin = flowWidthMinPixelsRef.current
+      const wMax = Math.max(wMin + 0.25, flowWidthMaxPixelsRef.current)
+      const dataSig = raw.map((r) => `${r.path.length}-${r.color.join(",")}`).join(";")
+      const prev = particleSystemsRef.current
+      if (
+        prev &&
+        prev.config.rawLen === raw.length &&
+        prev.config.dataSig === dataSig &&
+        prev.config.N === N &&
+        prev.config.deviation === deviation &&
+        prev.config.wMin === wMin &&
+        prev.config.wMax === wMax
+      )
+        return
+      const systems: FlowParticleDef[][] = []
+      raw.forEach((r, pathIdx) => {
+        const bandWidthScale = (r.lineWidth ?? 4) / 4
+        const pathParticles: FlowParticleDef[] = []
+        for (let k = 0; k < N; k++) {
+          const offsetedPath = offsetPath(r.path, deviation, k, bandWidthScale)
+          const timestamps = pathToTimestamps(offsetedPath)
+          const phase = k / N
+          const u = flowHashUnit(pathIdx * 1000 + k, 0)
+          const radius = Math.max(0.01, wMin + ((u + 1) / 2) * (wMax - wMin))
+          const speedFactor = Math.max(0.01, wMin) / Math.max(0.01, radius)
+          pathParticles.push({
+            offsetPath: offsetedPath,
+            timestamps,
+            phase,
+            radius,
+            speedFactor,
+            color: r.color,
+          })
+        }
+        systems.push(pathParticles)
+      })
+      particleSystemsRef.current = { config: { rawLen: raw.length, dataSig, N, deviation, wMin, wMax }, systems }
+    }
+
+    const tick = () => {
+      const constantFlow = flowConstantFlowRef.current
+      const timeMax = constantFlow ? FLOW_TIME_MAX : FLOW_TIME_MAX_LOOP
+      if (flowAnimatingRef.current) {
+        const t = (flowTimeRef.current + 0.004) % timeMax
+        flowTimeRef.current = t
+      }
+      ensureFlowParticlesInitialized()
+      const globalT = flowTimeRef.current
+      const baseTravelTime = FLOW_TIME_MAX
+      const particleData: FlowParticleDatum[] = []
+      const jitter = flowJitterRef.current
+      const systems = particleSystemsRef.current?.systems
+      if (systems) {
+        systems.forEach((pathParticles) => {
+          pathParticles.forEach((p) => {
+            const localT = (globalT / baseTravelTime) * p.speedFactor + p.phase
+            let progress: number
+            if (constantFlow) {
+              progress = ((localT % 1) + 1) % 1
+            } else {
+              if (localT > 1) return
+              progress = Math.min(1, Math.max(0, localT))
+            }
+            const pos = interpolatePathPosition(p.offsetPath, p.timestamps, progress)
+            if (!pos) return
+            let posJ: [number, number] = pos
+            if (jitter > 0) {
+              const s = FLOW_JITTER_SCALE * jitter
+              posJ = [
+                pos[0] + (Math.random() * 2 - 1) * s,
+                pos[1] + (Math.random() * 2 - 1) * s,
+              ]
+            }
+            particleData.push({ position: posJ, color: p.color, radius: p.radius })
+          })
+        })
+      }
+      const zoom = map.getZoom()
+      const zoomScale = zoom < 10 ? Math.pow(2, Math.max(0, 10 - zoom) / 4) : 1
+      const layers =
+        particleData.length > 0 && zoom >= CDMX_DEFAULT_ZOOM
+          ? [
+            new ScatterplotLayer<FlowParticleDatum>({
+              id: "geodata-flow-particles",
+              data: particleData,
+              getPosition: (d) => d.position,
+              getFillColor: (d) => (flowWindStyleWhiteRef.current ? [255, 255, 255, 220] : [...d.color, 220]),
+              getRadius: (d) => Math.max(0.5, d.radius * zoomScale),
+              radiusUnits: "pixels",
+            }),
+          ]
+        : []
+      overlay.setProps({ layers })
+      map.triggerRepaint()
+      flowFpsFrameCountRef.current += 1
+      if (flowFpsFrameCountRef.current >= 60) {
+        const now = performance.now()
+        const elapsed = (now - flowFpsLastTimeRef.current) / 1000
+        if (elapsed > 0) flowFpsSetRef.current?.(Math.round(60 / elapsed))
+        flowFpsFrameCountRef.current = 0
+        flowFpsLastTimeRef.current = now
+      }
+      rafId = window.requestAnimationFrame(tick)
+    }
+    rafId = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(rafId)
+  }, [isReady, hasFlowLayers])
+
+  useEffect(() => {
+    if (!hasFlowLayers) return
+    const id = setInterval(() => setFlowTime(flowTimeRef.current), 120)
+    return () => clearInterval(id)
+  }, [hasFlowLayers])
+
+  const onFlowTimeSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const t = Number(e.target.value)
+    flowTimeRef.current = t
+    setFlowTime(t)
+  }
 
   // Aplicar visibilidad de capas escenografía (estilo Mapbox).
   useEffect(() => {
@@ -922,6 +1370,54 @@ export function MapboxCanvas({
       map.off("mouseleave", METRO_STATIONS_LAYER_ID, onEventsLeave)
     }
   }, [isReady])
+
+  useEffect(() => {
+    if (!mapRef.current || !isReady || visibleGroupCodes.length === 0) return
+    const map = mapRef.current
+    const cleanupFns: Array<() => void> = []
+    const onGeodataPointEnter = () => { map.getCanvas().style.cursor = "pointer" }
+    const onGeodataPointLeave = () => { map.getCanvas().style.cursor = "" }
+    visibleGroupCodes.forEach((groupCode) => {
+      const pointsLayerId = geodataPointsLayerId(groupCode)
+      if (!map.getLayer(pointsLayerId)) return
+      const onGeodataPointClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapGeoJSONFeature[] }) => {
+        const f = e.features?.[0]
+        if (!f?.geometry || f.geometry.type !== "Point") return
+        e.preventDefault()
+        const props = f.properties as Record<string, unknown> | undefined
+        const name = typeof props?.name === "string" ? props.name : ""
+        const label = typeof props?.label === "string" ? props.label : ""
+        const text = label || name || "Punto"
+        const coords = (f.geometry as { type: "Point"; coordinates: [number, number] }).coordinates
+        const lngLat: [number, number] = [Number(coords[0]), Number(coords[1])]
+        if (geodataPopupRef.current) {
+          geodataPopupRef.current.remove()
+          geodataPopupRef.current = null
+        }
+        const popup = new mapboxgl.Popup({ closeButton: true, closeOnClick: false })
+          .setLngLat(lngLat)
+          .setHTML(`<div class="font-mono text-xs text-[var(--parchment)]">${escapeHtml(text)}</div>`)
+          .addTo(map)
+        geodataPopupRef.current = popup
+        popup.on("close", () => { geodataPopupRef.current = null })
+      }
+      map.on("click", pointsLayerId, onGeodataPointClick)
+      map.on("mouseenter", pointsLayerId, onGeodataPointEnter)
+      map.on("mouseleave", pointsLayerId, onGeodataPointLeave)
+      cleanupFns.push(() => {
+        map.off("click", pointsLayerId, onGeodataPointClick)
+        map.off("mouseenter", pointsLayerId, onGeodataPointEnter)
+        map.off("mouseleave", pointsLayerId, onGeodataPointLeave)
+      })
+    })
+    return () => {
+      if (geodataPopupRef.current) {
+        geodataPopupRef.current.remove()
+        geodataPopupRef.current = null
+      }
+      cleanupFns.forEach((fn) => fn())
+    }
+  }, [isReady, visibleGroupCodes])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return
@@ -1294,6 +1790,124 @@ export function MapboxCanvas({
           {showRain && <RainOverlay opacity={rainOpacity} />}
           {showSnow && <SnowOverlay opacity={0.6} />}
         </div>
+
+        {hasFlowLayers && showFlowParamsPanel && (
+          <div
+            className="absolute bottom-4 left-4 right-4 z-[100] pointer-events-auto flex flex-wrap items-center gap-x-6 gap-y-3 p-3 rounded-lg shadow-lg"
+            style={{ background: "var(--panel-bg)", border: "1px solid var(--panel-border)" }}
+          >
+            <span className="font-mono text-xs font-medium text-[var(--parchment)] w-full mb-1">Flujo (wind)</span>
+            <span className="font-mono text-[10px] text-[var(--parchment-dim)] w-full mb-1" title="Qué hace cada control">Tiempo = playhead · Partículas = cantidad · Desviación = ancho banda · Vibración = shimmer · Tamaño min/max = radio del punto</span>
+            <span className="font-mono text-[10px] text-[var(--parchment-dim)]" title="Frames por segundo">FPS: {flowFps ?? "—"}</span>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={flowWindStyleWhite}
+                onChange={(e) => setFlowWindStyleWhite(e.target.checked)}
+                className="rounded"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)]" title="Partículas blancas como referencia wind">Estilo wind (blanco)</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={flowAnimating}
+                onChange={(e) => setFlowAnimating(e.target.checked)}
+                className="rounded"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)]">Animación</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={flowConstantFlow}
+                onChange={(e) => {
+                  const v = e.target.checked
+                  setFlowConstantFlow(v)
+                  if (v && flowTime > FLOW_TIME_MAX) setFlowTime(flowTime % FLOW_TIME_MAX)
+                  if (!v && flowTime > FLOW_TIME_MAX_LOOP) setFlowTime(flowTime % FLOW_TIME_MAX_LOOP)
+                }}
+                className="rounded"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)]" title="Desaparecen al final y se sigue emitiendo">Flujo constante</span>
+            </label>
+            <label className="flex items-center gap-2 min-w-0">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Tiempo (playhead)</span>
+              <input
+                type="range"
+                min={0}
+                max={flowConstantFlow ? FLOW_TIME_MAX : FLOW_TIME_MAX_LOOP}
+                step={0.01}
+                value={Math.min(flowTime, flowConstantFlow ? FLOW_TIME_MAX : FLOW_TIME_MAX_LOOP)}
+                onChange={onFlowTimeSliderChange}
+                className="w-24"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] w-10">{flowTime.toFixed(2)}</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Partículas</span>
+              <input
+                type="number"
+                min={1}
+                max={2000}
+                value={flowParticleCount}
+                onChange={(e) => setFlowParticleCount(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
+                className="font-mono text-xs w-14 px-1 py-0.5 rounded border border-[var(--panel-border)] bg-transparent text-[var(--parchment)]"
+              />
+            </label>
+            <label className="flex items-center gap-2 min-w-0" title="Ancho de la banda donde se reparten las partículas (0 = sobre la línea)">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Desviación</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={flowPathDeviation}
+                onChange={(e) => setFlowPathDeviation(Number(e.target.value))}
+                className="w-24"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] w-8">{flowPathDeviation.toFixed(2)}</span>
+            </label>
+            <label className="flex items-center gap-2 min-w-0" title="Desplazamiento aleatorio por frame (shimmer)">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Vibración</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={flowJitter}
+                onChange={(e) => setFlowJitter(Number(e.target.value))}
+                className="w-24"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] w-8">{flowJitter.toFixed(2)}</span>
+            </label>
+            <label className="flex items-center gap-2 min-w-0" title="Radio mínimo de cada punto (0.01–20 px)">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Tamaño min</span>
+              <input
+                type="range"
+                min={0.01}
+                max={20}
+                step={0.1}
+                value={flowWidthMinPixels}
+                onChange={(e) => setFlowWidthMinPixels(Number(e.target.value))}
+                className="w-24"
+              />
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] w-8">{flowWidthMinPixels.toFixed(2)}</span>
+            </label>
+            <label className="flex items-center gap-2 min-w-0" title="Radio máximo de cada punto (0.01–20 px, más grande = más lento)">
+              <span className="font-mono text-[10px] text-[var(--parchment-dim)] shrink-0">Tamaño max</span>
+              <input
+                type="number"
+                min={0.01}
+                max={20}
+                step={0.1}
+                value={flowWidthMaxPixels}
+                onChange={(e) => setFlowWidthMaxPixels(Math.max(0.01, Math.min(20, Number(e.target.value) || 0.01)))}
+                className="font-mono text-xs w-14 px-1 py-0.5 rounded border border-[var(--panel-border)] bg-transparent text-[var(--parchment)]"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Controls label */}

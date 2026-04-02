@@ -170,6 +170,12 @@ const MapPanelInner = ({
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (!showMapTestPanel && expandedSection === "prueba-mapa") {
+      setExpandedSection("filtros")
+    }
+  }, [showMapTestPanel, expandedSection])
+
   const filteredEvents = events.filter((e) => {
     if (filters.type !== "all" && e.type !== filters.type) return false
     if (filters.intensity !== "all" && e.intensity !== filters.intensity) return false
@@ -535,8 +541,8 @@ const MapPanelInner = ({
               )}
             </div>
 
-          {/* Prueba mapa - oculto por diseño; capas dinámicas desde catálogo */}
-          {false && showMapTestPanel && mapConfig && onMapConfigChange && (
+          {/* Parámetros del mapa (estilo, capas, borde, etc.) */}
+          {showMapTestPanel && mapConfig && onMapConfigChange && (
             <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"

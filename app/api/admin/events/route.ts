@@ -5,18 +5,28 @@ import { requireSession } from "@/lib/auth/require-session"
 const DEFAULT_PAGE = 1
 const DEFAULT_PAGE_SIZE = 20
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function GET(request: Request) {
   const auth = await requireSession(request)
   if (auth instanceof NextResponse) return auth
   try {
     const { searchParams } = new URL(request.url)
+    const containerId = searchParams.get("container_id")?.trim() ?? ""
+    const unassignedParam = searchParams.get("unassigned_only")?.trim().toLowerCase() ?? ""
+    const unassignedOnly = unassignedParam === "1" || unassignedParam === "true" || unassignedParam === "yes"
     const page = Math.max(1, parseInt(searchParams.get("page") ?? String(DEFAULT_PAGE), 10) || DEFAULT_PAGE)
     const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get("pageSize") ?? String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE))
 
     const supabase = createAdminClient()
     const { data, error } = await supabase.rpc("get_events_for_moderation")
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    const all = data ?? []
+    let all = data ?? []
+    if (unassignedOnly) {
+      all = all.filter((e: { location_container_id?: string | null }) => e.location_container_id == null)
+    } else if (containerId && UUID_REGEX.test(containerId)) {
+      all = all.filter((e: { location_container_id?: string | null }) => e.location_container_id === containerId)
+    }
     const total = all.length
     const offset = (page - 1) * pageSize
     const dataPage = all.slice(offset, offset + pageSize)

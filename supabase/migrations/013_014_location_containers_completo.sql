@@ -1,6 +1,7 @@
--- Puntos contenedores: ubicaciones a las que se pueden ligar varios eventos.
--- Un evento puede tener su propia location o location_container_id; si tiene contenedor,
--- la posición para pintar/agrupar es la del contenedor.
+-- =============================================================================
+-- Script completo: location_containers (013 + 014)
+-- Ejecutar en Supabase SQL Editor
+-- =============================================================================
 
 -- 1) Tabla location_containers
 CREATE TABLE IF NOT EXISTS location_containers (
@@ -22,24 +23,28 @@ ALTER TABLE events
 
 CREATE INDEX IF NOT EXISTS events_location_container_id_idx ON events(location_container_id);
 
--- 3) RLS: lectura pública de contenedores
+-- 3) RLS
 ALTER TABLE location_containers ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "location_containers_select_all" ON location_containers;
 CREATE POLICY "location_containers_select_all"
   ON location_containers FOR SELECT
   USING (true);
 
+DROP POLICY IF EXISTS "location_containers_insert_authenticated" ON location_containers;
 CREATE POLICY "location_containers_insert_authenticated"
   ON location_containers FOR INSERT
   TO authenticated
   WITH CHECK (true);
 
+DROP POLICY IF EXISTS "location_containers_update_authenticated" ON location_containers;
 CREATE POLICY "location_containers_update_authenticated"
   ON location_containers FOR UPDATE
   TO authenticated
   USING (true)
   WITH CHECK (true);
 
+DROP POLICY IF EXISTS "location_containers_delete_authenticated" ON location_containers;
 CREATE POLICY "location_containers_delete_authenticated"
   ON location_containers FOR DELETE
   TO authenticated
@@ -163,7 +168,7 @@ $$;
 GRANT EXECUTE ON FUNCTION create_event(event_type, timestamptz, text, text, text, emotional_intensity, boolean, float, float, uuid) TO authenticated;
 GRANT EXECUTE ON FUNCTION create_event(event_type, timestamptz, text, text, text, emotional_intensity, boolean, float, float, uuid) TO anon;
 
--- 6) RPC: listar contenedores en bounds (para mapa y formulario)
+-- 6) get_location_containers_in_bounds
 CREATE OR REPLACE FUNCTION get_location_containers_in_bounds(
   p_north float,
   p_south float,
@@ -202,7 +207,7 @@ $$;
 GRANT EXECUTE ON FUNCTION get_location_containers_in_bounds(float, float, float, float) TO anon;
 GRANT EXECUTE ON FUNCTION get_location_containers_in_bounds(float, float, float, float) TO authenticated;
 
--- 7) RPC: listar todos los contenedores (para admin y selector en formulario)
+-- 7) get_location_containers_all
 CREATE OR REPLACE FUNCTION get_location_containers_all()
 RETURNS TABLE (
   id uuid,
@@ -231,3 +236,102 @@ $$;
 
 GRANT EXECUTE ON FUNCTION get_location_containers_all() TO anon;
 GRANT EXECUTE ON FUNCTION get_location_containers_all() TO authenticated;
+
+-- 8) create_location_container (admin)
+CREATE OR REPLACE FUNCTION create_location_container(
+  p_lat float,
+  p_lng float,
+  p_label text DEFAULT NULL,
+  p_group text DEFAULT NULL,
+  p_layer text DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  INSERT INTO location_containers (location, label, "group", layer)
+  VALUES (
+    ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography,
+    p_label,
+    p_group,
+    p_layer
+  )
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION create_location_container(float, float, text, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION create_location_container(float, float, text, text, text) TO service_role;
+
+-- 9) update_location_container (admin)
+CREATE OR REPLACE FUNCTION update_location_container(
+  p_id uuid,
+  p_lat float DEFAULT NULL,
+  p_lng float DEFAULT NULL,
+  p_label text DEFAULT NULL,
+  p_group text DEFAULT NULL,
+  p_layer text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE location_containers
+  SET
+    location = CASE
+      WHEN p_lat IS NOT NULL AND p_lng IS NOT NULL THEN ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography
+      ELSE location
+    END,
+    label = CASE WHEN p_label IS NOT NULL THEN p_label ELSE label END,
+    "group" = CASE WHEN p_group IS NOT NULL THEN p_group ELSE "group" END,
+    layer = CASE WHEN p_layer IS NOT NULL THEN p_layer ELSE layer END,
+    updated_at = now()
+  WHERE id = p_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION update_location_container(uuid, float, float, text, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION update_location_container(uuid, float, float, text, text, text) TO service_role;
+
+-- 10) update_event_container_id (admin)
+CREATE OR REPLACE FUNCTION update_event_container_id(
+  p_event_id uuid,
+  p_location_container_id uuid DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_lng float;
+  v_lat float;
+BEGIN
+  IF p_location_container_id IS NOT NULL THEN
+    SELECT ST_X(location::geometry)::float, ST_Y(location::geometry)::float
+    INTO v_lng, v_lat
+    FROM location_containers
+    WHERE id = p_location_container_id;
+    IF v_lng IS NULL OR v_lat IS NULL THEN
+      RAISE EXCEPTION 'location_container_id no encontrado: %', p_location_container_id;
+    END IF;
+    UPDATE events
+    SET
+      location = ST_SetSRID(ST_MakePoint(v_lng, v_lat), 4326)::geography,
+      location_container_id = p_location_container_id,
+      updated_at = now()
+    WHERE id = p_event_id;
+  ELSE
+    UPDATE events
+    SET location_container_id = NULL, updated_at = now()
+    WHERE id = p_event_id;
+  END IF;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION update_event_container_id(uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION update_event_container_id(uuid, uuid) TO service_role;

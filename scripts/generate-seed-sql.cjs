@@ -2,6 +2,7 @@
  * Generates 002_seed_events.sql by parsing lib/data.ts and lib/metro-events.ts
  * Run: node scripts/generate-seed-sql.cjs
  */
+/* eslint-disable @typescript-eslint/no-require-imports -- CommonJS script */
 const fs = require("fs");
 const path = require("path");
 

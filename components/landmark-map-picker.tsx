@@ -31,7 +31,10 @@ export function LandmarkMapPicker({
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const onSelectRef = useRef(onSelect)
-  onSelectRef.current = onSelect
+
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
 
   useEffect(() => {
     const el = containerRef.current

@@ -23,7 +23,10 @@ export function ParticlesOverlay({
   const containerRef = useRef<HTMLDivElement>(null)
   const materialRef = useRef<THREE.PointsMaterial | null>(null)
   const speedRef = useRef(speed)
-  speedRef.current = speed
+
+  useEffect(() => {
+    speedRef.current = speed
+  }, [speed])
 
   useEffect(() => {
     if (!enabled) return

@@ -2,14 +2,24 @@
  * Respaldo de todos los eventos (tabla events) a un JSON.
  * Ejecutar antes de cualquier limpieza o migración destructiva.
  * Uso: npm run scripts:backup-events  (carga .env.local vía dotenv-cli)
+ *
+ * Incluye todas las columnas actuales (p. ej. location_container_id).
+ *
+ * Restaurar: npm run scripts:restore-events -- --file backup/events-....json
+ * (ver scripts/restore-events.mjs). Orden recomendado: 1) backup del estado actual,
+ * 2) opcional --delete-all-first --confirm si quieres tabla vacía, 3) restore.
+ * Por defecto el restore anula created_by y location_container_id (FK) salvo que
+ * uses --preserve-* y existan esos UUIDs en la BD.
  */
 import { createClient } from "@supabase/supabase-js"
+import { config as loadEnv } from "dotenv"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, "..")
+loadEnv({ path: path.join(ROOT, ".env.local") })
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY

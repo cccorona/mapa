@@ -91,6 +91,7 @@ function MapaDeObservacionesContent() {
   const [events, setEvents] = useState<ObservationEvent[]>([])
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState(false)
+  const catalogLayersHydratedRef = useRef(false)
 
   const clearPopupTransitionTimer = useCallback(() => {
     if (popupTransitionTimerRef.current) {
@@ -145,6 +146,37 @@ function MapaDeObservacionesContent() {
     }))
   }, [searchParams])
 
+  // Catálogo: por defecto todos los grupos visibles en mapa (evita visibleGroups vacío → sin puntos en Mapbox).
+  useEffect(() => {
+    if (catalogLayersHydratedRef.current) return
+    let cancelled = false
+    fetch("/api/layer-catalog")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c: { hierarchy?: Record<string, unknown>; groups?: { code: string; name: string }[] } | null) => {
+        if (cancelled || !c) return
+        let codes: string[] = []
+        if (c.groups && Array.isArray(c.groups)) {
+          codes = c.groups.map((g) => g.code)
+        } else if (c.hierarchy && typeof c.hierarchy === "object") {
+          codes = Object.keys(c.hierarchy)
+        }
+        if (codes.length === 0) return
+        setFilters((f) => {
+          if (catalogLayersHydratedRef.current) return f
+          if (Object.keys(f.visibleGroups ?? {}).length > 0) return f
+          catalogLayersHydratedRef.current = true
+          return {
+            ...f,
+            visibleGroups: Object.fromEntries(codes.map((code) => [code, true] as const)),
+          }
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     return () => clearPopupTransitionTimer()
   }, [clearPopupTransitionTimer])
@@ -174,6 +206,33 @@ function MapaDeObservacionesContent() {
         .catch(() => {})
     })
   }, [filters.visibleGroups, layerGeodataByGroup])
+
+  // Refrescar geodata cuando vuelves al mapa (p. ej. tras editar en admin)
+  useEffect(() => {
+    const onVisible = () => {
+      const codes = Object.keys(filters.visibleGroups ?? {}).filter((c) => filters.visibleGroups?.[c])
+      if (codes.length === 0) return
+      codes.forEach((groupCode) => {
+        fetch(`/api/layer-geodata?group_code=${encodeURIComponent(groupCode)}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .then((list: Array<{ id: string | number; name: string; type: string }>) => {
+            const items = (list ?? []).map(({ id, name, type }) => ({ id: String(id), name, type }))
+            setLayerGeodataByGroup((prev) => ({ ...prev, [groupCode]: items }))
+            setVisibleLayerGeodata((prev) => {
+              const next = { ...prev }
+              const byId: Record<string, boolean> = {}
+              items.forEach(({ id }) => { byId[id] = prev[groupCode]?.[String(id)] ?? true })
+              next[groupCode] = byId
+              return next
+            })
+          })
+          .catch(() => {})
+      })
+    }
+    if (typeof document === "undefined") return
+    document.addEventListener("visibilitychange", onVisible)
+    return () => document.removeEventListener("visibilitychange", onVisible)
+  }, [filters.visibleGroups])
 
   const handleVisibleLayerGeodataChange = useCallback(
     (groupCode: string, layerGeodataId: string, visible: boolean) => {

@@ -8,6 +8,8 @@ import { EVENT_TYPE_LABELS, INTENSITY_LABELS, getSymbolForType } from "@/lib/ico
 import { SymbolIcon } from "@/components/symbol-icon"
 import type { PopupConfig } from "@/lib/map-config"
 
+const CAROUSEL_VIGNETTE_SRC = "/images/event-popup-carousel-vignette.png"
+
 function MetroGlyph() {
   return (
     <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden>
@@ -115,7 +117,7 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
           "relative pointer-events-auto",
           "w-full md:w-[360px] lg:w-[400px]",
           "md:mr-6 md:mb-0 mb-0",
-          "max-h-[70vh] md:max-h-[80vh] overflow-y-auto",
+          "max-h-[70vh] md:max-h-[80vh] flex flex-col overflow-hidden",
           "rounded-t-lg md:rounded-lg",
           "border border-[var(--panel-border)]",
           "shadow-2xl",
@@ -149,41 +151,6 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
                 mixBlendMode: "overlay",
               }}
             />
-
-            {/* Carousel controls when multiple events */}
-            {events.length > 1 && (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 z-10">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setCarouselIndex((i) => (i > 0 ? i - 1 : events.length - 1))
-                  }}
-                  className="w-7 h-7 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:bg-[var(--panel-border)]/20 transition-colors"
-                  aria-label="Anterior"
-                >
-                  <svg width="8" height="12" viewBox="0 0 8 12" fill="none">
-                    <path d="M6 2L2 6l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-                <span className="font-mono text-[10px] tracking-wider text-[var(--parchment-dim)] min-w-[2.5rem] text-center">
-                  {carouselIndex + 1}/{events.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setCarouselIndex((i) => (i < events.length - 1 ? i + 1 : 0))
-                  }}
-                  className="w-7 h-7 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:bg-[var(--panel-border)]/20 transition-colors"
-                  aria-label="Siguiente"
-                >
-                  <svg width="8" height="12" viewBox="0 0 8 12" fill="none">
-                    <path d="M2 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </button>
-              </div>
-            )}
 
             {/* Header */}
             <div className="px-6 pt-6 pb-4 border-b border-[var(--panel-border)] flex items-start gap-4">
@@ -258,7 +225,8 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
               </div>
             </div>
 
-            {/* Body */}
+            {/* Body: scroll independiente; el pie con viñeta queda fijo al fondo de la tarjeta */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
             <div className="px-6 py-5">
               {/* Location (event) or Station (metro) */}
               {isMetroPopup ? (
@@ -318,6 +286,58 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
                 {event.coords.lat.toFixed(4)}° N · {event.coords.lng.toFixed(4)}° O
               </p>
             </div>
+            </div>
+
+            {/* Pie de tarjeta: viñeta tipo libro antiguo + navegación (solo varias observaciones) */}
+            {events.length > 1 && !isMetroPopup && (
+              <div
+                className="shrink-0 border-t border-[var(--panel-border)]/70 bg-[linear-gradient(180deg,rgba(15,26,22,0.92)_0%,rgba(13,17,23,0.98)_100%)] px-4 pt-3 pb-4 rounded-b-lg md:rounded-b-lg"
+                role="group"
+                aria-label={`Observación ${carouselIndex + 1} de ${events.length}`}
+              >
+                <div className="pointer-events-none select-none mb-2 flex justify-center">
+                  <img
+                    src={CAROUSEL_VIGNETTE_SRC}
+                    alt=""
+                    width={320}
+                    height={48}
+                    className="w-[min(100%,280px)] h-9 sm:h-10 object-contain object-center opacity-[0.38] [filter:invert(1)_brightness(0.88)_sepia(0.35)_hue-rotate(-8deg)]"
+                    decoding="async"
+                  />
+                </div>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setCarouselIndex((i) => (i > 0 ? i - 1 : events.length - 1))
+                    }}
+                    className="w-6 h-6 shrink-0 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:border-[var(--sepia)]/45 hover:bg-[var(--sepia)]/8 transition-colors"
+                    aria-label="Anterior"
+                  >
+                    <svg width="7" height="11" viewBox="0 0 8 12" fill="none">
+                      <path d="M6 2L2 6l4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  <span className="font-serif italic text-[11px] sm:text-xs text-[var(--parchment-dim)] tracking-wide min-w-[5.5rem] text-center tabular-nums">
+                    {carouselIndex + 1} de {events.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setCarouselIndex((i) => (i < events.length - 1 ? i + 1 : 0))
+                    }}
+                    className="w-6 h-6 shrink-0 flex items-center justify-center rounded border border-[var(--panel-border)] text-[var(--parchment-dim)] hover:text-[var(--parchment)] hover:border-[var(--sepia)]/45 hover:bg-[var(--sepia)]/8 transition-colors"
+                    aria-label="Siguiente"
+                  >
+                    <svg width="7" height="11" viewBox="0 0 8 12" fill="none">
+                      <path d="M2 2l4 4-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
