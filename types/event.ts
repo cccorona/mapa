@@ -21,4 +21,8 @@ export interface ObservationEvent {
   sublayerDetail?: string
   /** Si el evento está ligado a un punto contenedor, su id (para agrupar en el slide). */
   containerId?: string
+  /** MHz en banda FM (88.1–107.9); ausente = no participa en modo radio. */
+  frequencyMhz?: number
+  /** URL de audio asociado al evento (modo radio). */
+  audioUrl?: string
 }

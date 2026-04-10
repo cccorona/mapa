@@ -5,6 +5,7 @@ import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
 import { METRO_LINE2_COORDS } from "@/lib/metro-station-coords"
 import { getStationNameByCode, getStationCodeForName } from "@/lib/event-layers"
+import { FM_MHZ_MAX, FM_MHZ_MIN } from "@/lib/radio-constants"
 
 const STATION_NAMES = Object.keys(METRO_LINE2_COORDS) as string[]
 
@@ -24,6 +25,8 @@ type EventRow = {
   sublayer?: string | null
   sublayer_detail?: string | null
   location_container_id?: string | null
+  frequency_mhz?: number | null
+  audio_url?: string | null
 }
 
 type LandmarkRow = {
@@ -56,6 +59,10 @@ export default function AdminPage() {
   const [landmarkFile, setLandmarkFile] = useState<File | null>(null)
   const [containers, setContainers] = useState<{ id: string; lat: number; lng: number; label: string | null }[]>([])
   const [containerAssigningId, setContainerAssigningId] = useState<string | null>(null)
+  const [radioFormByEvent, setRadioFormByEvent] = useState<
+    Record<string, { frequency: string; audioUrl: string }>
+  >({})
+  const [radioSavingId, setRadioSavingId] = useState<string | null>(null)
 
   const hasMore = events.length < total
 
@@ -82,6 +89,8 @@ export default function AdminPage() {
         sublayer: r.sublayer ?? null,
         sublayer_detail: r.sublayer_detail ?? null,
         location_container_id: r.location_container_id ?? null,
+        frequency_mhz: r.frequency_mhz ?? null,
+        audio_url: r.audio_url ?? null,
       }))
       setEvents(rows)
       setTotal(totalCount)
@@ -112,6 +121,8 @@ export default function AdminPage() {
         sublayer: r.sublayer ?? null,
         sublayer_detail: r.sublayer_detail ?? null,
         location_container_id: r.location_container_id ?? null,
+        frequency_mhz: r.frequency_mhz ?? null,
+        audio_url: r.audio_url ?? null,
       }))
       setEvents((prev) => [...prev, ...rows])
       setPage(nextPage)
@@ -230,6 +241,52 @@ export default function AdminPage() {
       return
     }
     if (station) handleAssignStation(eventId, station, LAYER_METRO)
+  }
+
+  const handleSaveRadio = async (e: EventRow) => {
+    const rf = radioFormByEvent[e.id]
+    const freqStr = (rf?.frequency ?? (e.frequency_mhz != null ? String(e.frequency_mhz) : "")).trim()
+    const audioStr = (rf?.audioUrl ?? (e.audio_url ?? "")).trim()
+    const body: { frequency_mhz: number | null; audio_url: string | null } = {
+      frequency_mhz: null,
+      audio_url: audioStr === "" ? null : audioStr,
+    }
+    if (freqStr === "") {
+      body.frequency_mhz = null
+    } else {
+      const n = Number.parseFloat(freqStr)
+      if (!Number.isFinite(n) || n < FM_MHZ_MIN || n > FM_MHZ_MAX) {
+        window.alert(`Frecuencia inválida: use ${FM_MHZ_MIN}–${FM_MHZ_MAX}`)
+        return
+      }
+      body.frequency_mhz = n
+    }
+    setRadioSavingId(e.id)
+    try {
+      const res = await fetch(`/api/admin/events/${e.id}/radio`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        window.alert(typeof err.error === "string" ? err.error : "Error al guardar")
+        return
+      }
+      setEvents((prev) =>
+        prev.map((evt) =>
+          evt.id === e.id ? { ...evt, frequency_mhz: body.frequency_mhz, audio_url: body.audio_url } : evt
+        )
+      )
+      setRadioFormByEvent((prev) => {
+        const next = { ...prev }
+        delete next[e.id]
+        return next
+      })
+    } finally {
+      setRadioSavingId(null)
+    }
   }
 
   const handleAddLandmark = async (e: React.FormEvent) => {
@@ -479,6 +536,63 @@ export default function AdminPage() {
                             Pasar a capa por defecto
                           </button>
                         )}
+                      </div>
+                      <div className="pt-2 border-t border-[var(--panel-border)] mt-2 space-y-2">
+                        <p className="font-mono text-xs text-[var(--parchment-dim)]">Radio FM (exploración en mapa)</p>
+                        <label className="block">
+                          <span className="font-mono text-xs text-[var(--parchment-dim)] block mb-1">
+                            MHz ({FM_MHZ_MIN}–{FM_MHZ_MAX}, vacío = sin radio)
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={
+                              radioFormByEvent[e.id]?.frequency ??
+                              (e.frequency_mhz != null ? String(e.frequency_mhz) : "")
+                            }
+                            onChange={(ev) =>
+                              setRadioFormByEvent((prev) => ({
+                                ...prev,
+                                [e.id]: {
+                                  frequency: ev.target.value,
+                                  audioUrl:
+                                    prev[e.id]?.audioUrl ?? (e.audio_url ?? ""),
+                                },
+                              }))
+                            }
+                            className="font-mono text-xs border border-[var(--panel-border)] rounded px-2 py-1.5 bg-transparent text-[var(--parchment)] w-full"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="font-mono text-xs text-[var(--parchment-dim)] block mb-1">
+                            URL audio (MP3)
+                          </span>
+                          <input
+                            type="url"
+                            value={radioFormByEvent[e.id]?.audioUrl ?? (e.audio_url ?? "")}
+                            onChange={(ev) =>
+                              setRadioFormByEvent((prev) => ({
+                                ...prev,
+                                [e.id]: {
+                                  frequency:
+                                    prev[e.id]?.frequency ??
+                                    (e.frequency_mhz != null ? String(e.frequency_mhz) : ""),
+                                  audioUrl: ev.target.value,
+                                },
+                              }))
+                            }
+                            placeholder="https://…"
+                            className="font-mono text-xs border border-[var(--panel-border)] rounded px-2 py-1.5 bg-transparent text-[var(--parchment)] w-full"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          disabled={radioSavingId === e.id}
+                          onClick={() => handleSaveRadio(e)}
+                          className="px-3 py-1.5 font-mono text-xs border border-[var(--sepia)]/50 text-[var(--parchment-dim)] hover:text-[var(--parchment)] rounded disabled:opacity-50"
+                        >
+                          {radioSavingId === e.id ? "Guardando…" : "Guardar radio"}
+                        </button>
                       </div>
                     </div>
                   )}

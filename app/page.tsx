@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef, Suspense } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { MapPanel } from "@/components/map-panel"
@@ -17,6 +17,12 @@ import { cn, filterEventsInBounds, groupEventsByLocation, locationKey } from "@/
 import { CDMX_BOUNDS, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
 import { getDefaultMapConfig, DEFAULT_MAP_CONFIG, type MapConfig } from "@/lib/map-config"
 import { ParticlesOverlay } from "@/components/particles-overlay"
+import { RadioExplorationDock, loadRadioSessionDefaults } from "@/components/radio-exploration"
+import { useRadioAudio } from "@/hooks/use-radio-audio"
+import type { RadioTransmission } from "@/lib/radio-types"
+import { orderPopupEventsForRadio } from "@/lib/order-popup-events-for-radio"
+import { clampFmMhz } from "@/lib/radio-frequency"
+import { collectSpectrumFrequencies, computeSignalQuality01 } from "@/lib/radio-signal-quality"
 
 const DEFAULT_FILTERS = {
   type: "all",
@@ -92,6 +98,11 @@ function MapaDeObservacionesContent() {
   const [eventsLoading, setEventsLoading] = useState(false)
   const [eventsError, setEventsError] = useState(false)
   const catalogLayersHydratedRef = useRef(false)
+  const [exploreWithRadio, setExploreWithRadio] = useState(false)
+  const [tunedMhz, setTunedMhz] = useState(() => clampFmMhz(96.5))
+  const [radioTransmissions, setRadioTransmissions] = useState<RadioTransmission[]>([])
+  const [popupFocusedEventId, setPopupFocusedEventId] = useState<string | null>(null)
+  const radioHydratedRef = useRef(false)
 
   const clearPopupTransitionTimer = useCallback(() => {
     if (popupTransitionTimerRef.current) {
@@ -207,6 +218,21 @@ function MapaDeObservacionesContent() {
     })
   }, [filters.visibleGroups, layerGeodataByGroup])
 
+  useEffect(() => {
+    if (radioHydratedRef.current) return
+    radioHydratedRef.current = true
+    const { explore, tuned } = loadRadioSessionDefaults()
+    setExploreWithRadio(explore)
+    setTunedMhz(tuned)
+  }, [])
+
+  useEffect(() => {
+    fetch("/api/radio-transmissions")
+      .then((r) => (r.ok ? r.json() : { transmissions: [] }))
+      .then((d: { transmissions?: RadioTransmission[] }) => setRadioTransmissions(d.transmissions ?? []))
+      .catch(() => setRadioTransmissions([]))
+  }, [])
+
   // Refrescar geodata cuando vuelves al mapa (p. ej. tras editar en admin)
   useEffect(() => {
     const onVisible = () => {
@@ -262,6 +288,36 @@ function MapaDeObservacionesContent() {
       return true
     })
 
+  const spectrumFrequenciesMhz = useMemo(
+    () => collectSpectrumFrequencies(filteredEvents, radioTransmissions),
+    [filteredEvents, radioTransmissions]
+  )
+
+  const signalQuality01 = useMemo(
+    () => computeSignalQuality01(tunedMhz, spectrumFrequenciesMhz),
+    [tunedMhz, spectrumFrequenciesMhz]
+  )
+
+  const popupEventsForCard = useMemo(
+    () => orderPopupEventsForRadio(popupEventsAtPoint, exploreWithRadio, tunedMhz),
+    [popupEventsAtPoint, exploreWithRadio, tunedMhz]
+  )
+
+  const handlePopupFocusedEvent = useCallback((ev: ObservationEvent | null) => {
+    setPopupFocusedEventId(ev?.id ?? null)
+  }, [])
+
+  const getEventsForRadio = useCallback(() => filteredEvents, [filteredEvents])
+  const getTransmissionsForRadio = useCallback(() => radioTransmissions, [radioTransmissions])
+
+  const { unlockAudio } = useRadioAudio({
+    enabled: exploreWithRadio,
+    tunedMhz,
+    focusedEventId: popupFocusedEventId,
+    getEvents: getEventsForRadio,
+    getTransmissions: getTransmissionsForRadio,
+  })
+
   const selectedMetroStory = null
 
   const handleSelectEvent = useCallback((id: string) => {
@@ -306,6 +362,7 @@ function MapaDeObservacionesContent() {
   const handleSelectMetroStory = useCallback((id: string) => {
     setMobileDrawerOpen(false)
     setPopupEventsAtPoint([])
+    setPopupFocusedEventId(null)
     setPopupStationId(null)
     if (selectedMetroStoryId === id && popupMetroStoryId === id) return
 
@@ -401,6 +458,7 @@ function MapaDeObservacionesContent() {
     (stationId: string) => {
       setMobileDrawerOpen(false)
       setPopupEventsAtPoint([])
+      setPopupFocusedEventId(null)
       setSelectedMetroStoryId(null)
       setPopupMetroStoryId(null)
       if (popupStationId === stationId) return
@@ -439,6 +497,7 @@ function MapaDeObservacionesContent() {
   const handleClosePopup = useCallback(() => {
     clearPopupTransitionTimer()
     setSelectedMetroStoryId(null)
+    setPopupFocusedEventId(null)
     const hasPopupOpen = popupEventsAtPoint.length > 0 || !!popupMetroStoryId || !!popupStationId
     if (!hasPopupOpen) return
     setPopupPhase("exiting")
@@ -548,6 +607,8 @@ function MapaDeObservacionesContent() {
             onMapConfigChange={handleMapConfigChange}
             showMapTestPanel={hasMapboxToken && !IS_PRD}
             isPrd={IS_PRD}
+            exploreWithRadio={exploreWithRadio}
+            onExploreWithRadioChange={setExploreWithRadio}
           />
         </div>
 
@@ -592,6 +653,8 @@ function MapaDeObservacionesContent() {
               onMapConfigChange={handleMapConfigChange}
               showMapTestPanel={hasMapboxToken && !IS_PRD}
               isPrd={IS_PRD}
+              exploreWithRadio={exploreWithRadio}
+              onExploreWithRadioChange={setExploreWithRadio}
             />
           </div>
         </div>
@@ -629,6 +692,8 @@ function MapaDeObservacionesContent() {
                 escenografiaVisible={escenografiaVisible}
                 onEscenografiaLayersLoaded={setEscenografiaLayers}
                 onReadyPhaseChange={handleMapReadyPhaseChange}
+                radioExplorationEnabled={exploreWithRadio}
+                tunedFrequencyMhz={tunedMhz}
               />
             </div>
           ) : (
@@ -658,11 +723,20 @@ function MapaDeObservacionesContent() {
 
           {/* Event / Metro story popup */}
           <EventPopup
-            events={popupEventsAtPoint}
+            events={popupEventsForCard}
             metroStory={selectedMetroStory}
             onClose={handleClosePopup}
             popupConfig={mapConfig.popupConfig}
             phase={popupPhase}
+            onFocusedEventChange={handlePopupFocusedEvent}
+          />
+
+          <RadioExplorationDock
+            exploreWithRadio={exploreWithRadio}
+            tunedMhz={tunedMhz}
+            onTunedMhzChange={setTunedMhz}
+            signalQuality01={signalQuality01}
+            onAudioUnlock={unlockAudio}
           />
 
           {/* Station popup (stations without story) */}

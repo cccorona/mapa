@@ -11,6 +11,7 @@ import type { MetroStation, MetroStory } from "@/types/metro"
 import { getSymbolForType, SYMBOLS } from "@/lib/icons"
 import { SYMBOL_COLORS } from "@/lib/theme"
 import { CDMX_BOUNDS, CDMX_CENTER, CDMX_DEFAULT_ZOOM } from "@/lib/map-bounds"
+import { FM_NO_FREQUENCY_SENTINEL } from "@/lib/radio-constants"
 import { DEFAULT_MAP_CONFIG } from "@/lib/map-config"
 import type { BoundaryGlowConfig, MapConfig } from "@/lib/map-config"
 import { AtmosphericOverlay } from "@/components/atmospheric-overlay"
@@ -248,6 +249,10 @@ function buildEventsGeoJSON(
           intensity: e.intensity,
           color: SYMBOL_COLORS[getSymbolForType(e.type)] ?? "#8b7355",
           symbol: getSymbolForType(e.type),
+          frequency_mhz:
+            typeof e.frequencyMhz === "number" && Number.isFinite(e.frequencyMhz)
+              ? e.frequencyMhz
+              : FM_NO_FREQUENCY_SENTINEL,
         },
       }))
     : []
@@ -316,6 +321,10 @@ interface MapboxCanvasProps {
   zoom?: number
   /** Solo admin: mostrar panel de parámetros de flujo (FPS, partículas, etc.). En mapa público no se muestra. */
   showFlowParamsPanel?: boolean
+  /** Modo exploración FM: pintura por proximidad de frecuencia. */
+  radioExplorationEnabled?: boolean
+  /** MHz sintonizadas (solo aplica si radioExplorationEnabled). */
+  tunedFrequencyMhz?: number
 }
 
 export function MapboxCanvas({
@@ -342,6 +351,8 @@ export function MapboxCanvas({
   mapConfig,
   zoom = CDMX_DEFAULT_ZOOM,
   showFlowParamsPanel = false,
+  radioExplorationEnabled = false,
+  tunedFrequencyMhz = 96.5,
 }: MapboxCanvasProps) {
   devLog("[landmarks] MapboxCanvas render, token:", !!mapboxgl.accessToken)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -1326,6 +1337,64 @@ export function MapboxCanvas({
       ["case", ["==", ["get", "eventId"], sel], 1.2, 1],
     ])
   }, [selectedEventId, isReady])
+
+  useEffect(() => {
+    if (!mapRef.current || !isReady) return
+    const map = mapRef.current
+    if (!map.getLayer(EVENTS_LAYER_ID)) return
+    const timer = window.setTimeout(() => {
+      if (!mapRef.current?.getLayer(EVENTS_LAYER_ID)) return
+      const m = mapRef.current
+      if (!radioExplorationEnabled) {
+        m.setPaintProperty(EVENTS_LAYER_ID, "icon-opacity", 1)
+        m.setPaintProperty(EVENTS_LAYER_ID, "icon-halo-width", 0)
+        m.setPaintProperty(EVENTS_LAYER_ID, "icon-halo-blur", 0)
+        return
+      }
+      const tuned = tunedFrequencyMhz
+      const opacityExpr: mapboxgl.Expression = [
+        "case",
+        ["<=", ["get", "frequency_mhz"], 0],
+        1,
+        [
+          "interpolate",
+          ["linear"],
+          ["abs", ["-", ["get", "frequency_mhz"], ["literal", tuned]]],
+          0,
+          1,
+          0.05,
+          1,
+          0.4,
+          0.52,
+          2,
+          0.28,
+        ],
+      ]
+      m.setPaintProperty(EVENTS_LAYER_ID, "icon-opacity", opacityExpr)
+      const haloExpr: mapboxgl.Expression = [
+        "case",
+        ["<=", ["get", "frequency_mhz"], 0],
+        0,
+        [
+          "interpolate",
+          ["linear"],
+          ["abs", ["-", ["get", "frequency_mhz"], ["literal", tuned]]],
+          0,
+          2.8,
+          0.08,
+          2.2,
+          0.4,
+          0.9,
+          2,
+          0,
+        ],
+      ]
+      m.setPaintProperty(EVENTS_LAYER_ID, "icon-halo-width", haloExpr)
+      m.setPaintProperty(EVENTS_LAYER_ID, "icon-halo-color", "rgba(212,201,168,0.55)")
+      m.setPaintProperty(EVENTS_LAYER_ID, "icon-halo-blur", 0.6)
+    }, 90)
+    return () => window.clearTimeout(timer)
+  }, [radioExplorationEnabled, tunedFrequencyMhz, isReady])
 
   useEffect(() => {
     if (!mapRef.current || !isReady) return

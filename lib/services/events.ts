@@ -19,6 +19,8 @@ type EventRow = {
   sublayer?: string | null
   sublayer_detail?: string | null
   location_container_id?: string | null
+  frequency_mhz?: number | null
+  audio_url?: string | null
 }
 
 function parseLocation(loc: unknown): { lat: number; lng: number } {
@@ -53,6 +55,11 @@ function rowToEvent(row: EventRow): ObservationEvent {
     sublayer: row.sublayer ?? undefined,
     sublayerDetail: row.sublayer_detail ?? undefined,
     containerId: row.location_container_id ?? undefined,
+    frequencyMhz:
+      typeof row.frequency_mhz === "number" && Number.isFinite(row.frequency_mhz)
+        ? row.frequency_mhz
+        : undefined,
+    audioUrl: row.audio_url ?? undefined,
   }
 }
 

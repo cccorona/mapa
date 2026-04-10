@@ -1,0 +1,12 @@
+{
+  "transmissions": [
+    {
+      "type": "transmission",
+      "id": "gst_demo_1019",
+      "frequency": 101.9,
+      "isLoop": true,
+      "audioUrl": "",
+      "title": "Señal fantasma (configurar audioUrl)"
+    }
+  ]
+}

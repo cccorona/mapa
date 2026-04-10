@@ -9,6 +9,9 @@ import { SymbolIcon } from "@/components/symbol-icon"
 import type { MapConfig, ArtisticMode, LightPreset } from "@/lib/map-config"
 import { ARTISTIC_PRESETS, DEFAULT_MAP_CONFIG, exportMapConfig } from "@/lib/map-config"
 
+const SHOW_RADIO_EXPLORATION =
+  typeof process !== "undefined" && process.env.NEXT_PUBLIC_RADIO_EXPLORATION !== "false"
+
 const MONTHS_ES = [
   "enero", "febrero", "marzo", "abril", "mayo", "junio",
   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
@@ -129,6 +132,9 @@ interface MapPanelProps {
   onMapConfigChange?: (config: MapConfig) => void
   showMapTestPanel?: boolean
   isPrd?: boolean
+  /** Modo FM narrativo: solo si `NEXT_PUBLIC_RADIO_EXPLORATION` no es false. */
+  exploreWithRadio?: boolean
+  onExploreWithRadioChange?: (on: boolean) => void
 }
 
 const MapPanelInner = ({
@@ -149,6 +155,8 @@ const MapPanelInner = ({
   onEscenografiaChange,
   showMapTestPanel = false,
   isPrd = false,
+  exploreWithRadio = false,
+  onExploreWithRadioChange,
 }: MapPanelProps) => {
   const [expandedSection, setExpandedSection] = useState<string | null>("filtros")
   const [expandedTestSubpanel, setExpandedTestSubpanel] = useState<string | null>(null)
@@ -171,10 +179,16 @@ const MapPanelInner = ({
   }, [])
 
   useEffect(() => {
-    if (!showMapTestPanel && expandedSection === "prueba-mapa") {
+    if ((!showMapTestPanel || isPrd) && expandedSection === "prueba-mapa") {
       setExpandedSection("filtros")
     }
-  }, [showMapTestPanel, expandedSection])
+  }, [showMapTestPanel, isPrd, expandedSection])
+
+  /** PRD: solo Filtros, Capas y Registros; cerrar secciones de desarrollo si quedaron abiertas. */
+  useEffect(() => {
+    if (!isPrd) return
+    setExpandedSection((cur) => (cur === "escenografia" || cur === "prueba-mapa" ? "filtros" : cur))
+  }, [isPrd])
 
   const filteredEvents = events.filter((e) => {
     if (filters.type !== "all" && e.type !== filters.type) return false
@@ -392,6 +406,36 @@ const MapPanelInner = ({
                   </button>
                 </div>
 
+                {SHOW_RADIO_EXPLORATION && onExploreWithRadioChange && (
+                  <div className="flex items-center justify-between gap-3 pt-1 border-t border-[var(--panel-border)]/60">
+                    <span className="font-mono text-[12px] tracking-[0.12em] text-[var(--parchment-dim)] leading-snug">
+                      Explorar con radio
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={exploreWithRadio}
+                      onClick={() => onExploreWithRadioChange(!exploreWithRadio)}
+                      className={cn(
+                        "relative shrink-0 w-8 h-4 rounded-full border transition-all duration-300",
+                        exploreWithRadio
+                          ? "border-[var(--primary)] bg-[var(--primary)]/20"
+                          : "border-[var(--panel-border)] bg-transparent"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "absolute top-0.5 w-3 h-3 rounded-full transition-all duration-300",
+                          exploreWithRadio
+                            ? "left-4 bg-[var(--primary)]"
+                            : "left-0.5 bg-[var(--panel-border)]"
+                        )}
+                      />
+                    </button>
+                  </div>
+                )}
+
+
               </div>
             )}
           </div>
@@ -483,8 +527,9 @@ const MapPanelInner = ({
               )}
             </div>
 
-          {/* Escenografía: capas del estilo Mapbox con id escenografia-* */}
-          <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
+          {/* Escenografía: solo entornos no PRD */}
+          {!isPrd && (
+            <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"
                 onClick={() => setExpandedSection(expandedSection === "escenografia" ? null : "escenografia")}
@@ -540,9 +585,10 @@ const MapPanelInner = ({
                 </div>
               )}
             </div>
+          )}
 
-          {/* Parámetros del mapa (estilo, capas, borde, etc.) */}
-          {showMapTestPanel && mapConfig && onMapConfigChange && (
+          {/* Parámetros del mapa (estilo, capas, borde, etc.) — solo desarrollo, no PRD */}
+          {showMapTestPanel && !isPrd && mapConfig && onMapConfigChange && (
             <div className="flex-shrink-0 border-b border-[var(--panel-border)]">
               <button
                 className="w-full flex items-center justify-between px-6 py-3 text-[var(--parchment-dim)] hover:text-[var(--parchment)] transition-colors"

@@ -25,9 +25,18 @@ interface EventPopupProps {
   onClose: () => void
   popupConfig: PopupConfig
   phase: "entering" | "visible" | "exiting"
+  /** Evento activo en el carrusel (p. ej. motor de audio FM). */
+  onFocusedEventChange?: (event: ObservationEvent | null) => void
 }
 
-export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: EventPopupProps) {
+export function EventPopup({
+  events,
+  metroStory,
+  onClose,
+  popupConfig,
+  phase,
+  onFocusedEventChange,
+}: EventPopupProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [carouselIndex, setCarouselIndex] = useState(0)
   const isEventPopup = events.length > 0
@@ -43,6 +52,16 @@ export function EventPopup({ events, metroStory, onClose, popupConfig, phase }: 
   useEffect(() => {
     setCarouselIndex(0)
   }, [events])
+
+  useEffect(() => {
+    if (!onFocusedEventChange) return
+    if (isMetroPopup || events.length === 0) {
+      onFocusedEventChange(null)
+      return
+    }
+    const ev = events[Math.min(carouselIndex, events.length - 1)]
+    onFocusedEventChange(ev ?? null)
+  }, [events, carouselIndex, isMetroPopup, onFocusedEventChange])
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
